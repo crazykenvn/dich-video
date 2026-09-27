@@ -21,3 +21,10 @@ dist/
 build/
 .env
 checkpoints/
+gemini_keys.txt
+output_*/
+input_videos/
+*.png
+*.jpg
+*.jpeg
+*.srt

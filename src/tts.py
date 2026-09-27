@@ -171,13 +171,16 @@ def build_dub_track(
 ) -> Path:
     from pydub import AudioSegment
 
+    import importlib.util
+    has_vieneu = importlib.util.find_spec("vieneu") is not None
+
     if voice is None:
-        if target_lang == "vi" and engine != "edge":
+        if target_lang == "vi" and has_vieneu and engine != "edge":
             voice = VIENEU_DEFAULT_VOICE
         else:
-            voice = EDGE_VOICE_MAP.get(target_lang, "en-US-JennyNeural")
+            voice = EDGE_VOICE_MAP.get(target_lang, "vi-VN-HoaiMyNeural" if target_lang == "vi" else "en-US-JennyNeural")
 
-    if engine == "auto" and target_lang == "vi" and not str(voice).startswith("vi-VN-"):
+    if engine == "auto" and target_lang == "vi" and not str(voice).startswith("vi-VN-") and has_vieneu:
         engine = "vieneu"
     elif engine == "auto":
         engine = "edge"

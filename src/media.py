@@ -20,6 +20,8 @@ def _run(cmd: list[str], timeout: int = 3600) -> subprocess.CompletedProcess:
             check=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except FileNotFoundError as exc:
@@ -80,37 +82,199 @@ def extract_audio(video_path: Path, wav_path: Path, sample_rate: int = 16000) ->
     return wav_path
 
 
+def _get_video_encode_args(video_quality: str = "high") -> list[str]:
+    """Tùy chọn chất lượng encode:
+    - 'high' (Mặc định, khuyên dùng): libx264 CRF 18, preset veryfast, yuv420p.
+      Giữ trọn 100% độ sắc nét gốc (visually lossless), loại bỏ hoàn toàn hiện tượng vỡ hạt/mờ chữ.
+    - 'medium': libx264 CRF 22, cân bằng dung lượng và tốc độ.
+    - 'gpu': Dùng GPU phần cứng qua h264_mf ở bitrate cao 25M - 35M (Quality 95).
+    """
+    import sys
+    if video_quality == "gpu" and sys.platform == "win32":
+        return [
+            "-c:v", "h264_mf",
+            "-rate_control", "3",
+            "-quality", "95",
+            "-b:v", "25M",
+            "-maxrate", "35M",
+            "-bufsize", "50M",
+        ]
+    elif video_quality == "medium":
+        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p"]
+    else:  # default "high" (CRF 18 visually lossless)
+        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
+
+
+def get_visual_anti_detect_filter() -> str:
+    """Kỹ thuật 1: Bộ lọc hình ảnh chống quét bản quyền cấu trúc (pHash / DCT):
+    - crop in_w*0.985:in_h*0.985: Cắt xén vi mô 1.5% viền ngoài.
+    - scale w=trunc(iw/0.985/2)*2:h=trunc(ih/0.985/2)*2: Phóng to lại kích thước gốc bằng Lanczos làm lệch toàn bộ ma trận pixel.
+    - setsar=1: Giữ tỷ lệ hiển thị nguyên bản 1:1.
+    - eq: Tinh chỉnh nhẹ độ tương phản 1.03, sáng 0.01, bão hòa 1.04.
+    - noise: Lớp hạt film grain động mịn 2.5% biến thiên theo thời gian thực (phá vỡ tính tĩnh).
+    """
+    return (
+        "crop=w=trunc(in_w*0.985/2)*2:h=trunc(in_h*0.985/2)*2,"
+        "scale=w=trunc(iw/0.985/2)*2:h=trunc(ih/0.985/2)*2:flags=lanczos,"
+        "setsar=1,"
+        "eq=contrast=1.03:brightness=0.01:saturation=1.04,"
+        "noise=c0s=2.5:allf=t"
+    )
+
+
+def get_audio_anti_detect_filter(sample_rate: int = 44100) -> str:
+    """Kỹ thuật 4: Bộ lọc âm thanh chống quét dấu vân tay (Acoustic Fingerprint):
+    - Pitch Shift +2.5% kết hợp bù tempo 1/1.025 (khớp khẩu hình 100%, không trôi tiếng, nghe tự nhiên).
+    - Parametric EQ: Xáo trộn năng lượng dải tần số 1000Hz (-2.5dB) và 3200Hz (+2.0dB) phá vỡ các đỉnh phổ.
+    """
+    return (
+        f"asetrate={sample_rate}*1.025,atempo=1/1.025,aresample={sample_rate},"
+        "equalizer=f=1000:t=q:w=1.5:g=-2.5,equalizer=f=3200:t=q:w=1.2:g=2.0"
+    )
+
+
+def get_subtitle_ass_style(
+    font_name: str = "Arial",
+    font_size: int = 11,
+    sub_style: str = "white_box",
+) -> str:
+    """Tạo chuỗi force_style cho libass.
+    - white_box: Chữ đen trên nền trắng mờ 55% (cực kỳ dễ đọc, tương phản cao, đúng yêu cầu)
+    - black_box: Chữ trắng trên nền đen mờ 50%
+    - classic: Chữ trắng viền đen (không hộp)
+    """
+    if sub_style == "white_box":
+        return (
+            f"FontName={font_name},FontSize={font_size},"
+            "PrimaryColour=&H00000000,OutlineColour=&H70FFFFFF,BackColour=&H70FFFFFF,"
+            "BorderStyle=3,Outline=3,Shadow=0,MarginV=25"
+        )
+    elif sub_style == "black_box":
+        return (
+            f"FontName={font_name},FontSize={font_size},"
+            "PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BackColour=&H80000000,"
+            "BorderStyle=3,Outline=3,Shadow=0,MarginV=25"
+        )
+    else:  # classic
+        return (
+            f"FontName={font_name},FontSize={font_size},"
+            "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,"
+            "BorderStyle=1,Outline=2,Shadow=0,MarginV=28"
+        )
+
+
 def mux_audio(
     video_path: Path,
     audio_path: Path,
     output_path: Path,
     original_mix: float = 0.0,
     srt_path: Path | None = None,
+    burn_sub: bool = False,
+    font_name: str = "Arial",
+    font_size: int = 11,
+    sub_style: str = "white_box",
+    watermark_enabled: bool = False,
+    watermark_path: Path | str | None = None,
+    watermark_opacity: float = 0.18,
+    watermark_motion: str = "drift",
+    video_quality: str = "high",
+    anti_video: bool = False,
+    anti_audio: bool = False,
 ) -> Path:
-    """Ghép video gốc với audio mới. original_mix=0.12 giữ ~12% tiếng gốc."""
+    """Ghép video gốc với audio mới và tùy chọn phụ đề/watermark/anti-detect.
+    - original_mix: giữ ~12% tiếng gốc.
+    - burn_sub: in phụ đề cứng lên hình ảnh.
+    - font_size: mặc định 11 (đã giảm 1/2 so với 22 cũ).
+    - sub_style: white_box (nền trắng mờ dễ đọc).
+    - watermark_enabled: chèn logo lách bản quyền di chuyển liên tục với độ mờ thấp.
+    - video_quality: 'high' (CRF 18 visually lossless - 100% gốc), 'medium' (CRF 22), 'gpu' (h264_mf 25M).
+    - anti_video: Kỹ thuật 1 - crop 1.5% + scale + film grain + micro EQ.
+    - anti_audio: Kỹ thuật 4 - biến điệu âm thanh gốc (pitch/tempo/eq) trước khi hòa âm.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = output_path.with_name(output_path.stem + ".tmp" + output_path.suffix)
     mix = max(0.0, min(1.0, float(original_mix or 0.0)))
-    cmd = ["ffmpeg", "-y", "-i", str(video_path), "-i", str(audio_path)]
-    if srt_path is not None:
-        cmd += ["-i", str(srt_path)]
+
+    cmd = ["ffmpeg", "-y", "-hwaccel", "auto", "-i", str(video_path), "-i", str(audio_path)]
+
+    has_wm = bool(watermark_enabled and watermark_path and Path(watermark_path).exists())
+    if has_wm:
+        cmd += ["-loop", "1", "-i", str(Path(watermark_path).resolve())]
+
+    filter_complex_parts: list[str] = []
+    cur_v = "0:v"
+    need_video_encode = False
+
+    # 1. Bộ lọc hình ảnh chống quét bản quyền (Kỹ thuật 1)
+    if anti_video:
+        filter_complex_parts.append(f"[{cur_v}]{get_visual_anti_detect_filter()}[v_anti]")
+        cur_v = "v_anti"
+        need_video_encode = True
+
+    # 2. Chèn Watermark Logo nếu kích hoạt
+    if has_wm:
+        from .watermark import get_watermark_motion_expr
+
+        x_expr, y_expr = get_watermark_motion_expr(watermark_motion)
+        op = max(0.03, min(1.0, float(watermark_opacity or 0.18)))
+        filter_complex_parts.append(
+            f"[2:v]format=rgba,colorchannelmixer=aa={op:.2f},scale=180:-1[wm_ready]"
+        )
+        filter_complex_parts.append(
+            f"[{cur_v}][wm_ready]overlay=x='{x_expr}':y='{y_expr}':shortest=1[v_wm]"
+        )
+        cur_v = "v_wm"
+        need_video_encode = True
+
+    # 3. In phụ đề cứng nếu kích hoạt
+    if burn_sub and srt_path is not None:
+        srt_escaped = (
+            str(srt_path.resolve())
+            .replace("\\", "/")
+            .replace(":", "\\:")
+            .replace("'", r"\'")
+        )
+        style = get_subtitle_ass_style(font_name=font_name, font_size=font_size, sub_style=sub_style)
+        filter_complex_parts.append(
+            f"[{cur_v}]subtitles='{srt_escaped}':force_style='{style}'[v_sub]"
+        )
+        cur_v = "v_sub"
+        need_video_encode = True
+
+    # 4. Hòa trộn âm thanh (Audio Mixing) có biến điệu tiếng gốc (Kỹ thuật 4)
     if mix > 0:
-        cmd += [
-            "-filter_complex",
-            f"[0:a]volume={mix}[a0];[1:a]volume=1.0[a1];"
-            "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
-            "-map",
-            "0:v:0",
-            "-map",
-            "[a]",
-        ]
+        if anti_audio:
+            filter_complex_parts.append(
+                f"[0:a]{get_audio_anti_detect_filter()}[a0_clean];"
+                f"[a0_clean]volume={mix}[a0];[1:a]volume=1.0[a1];"
+                "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a_out]"
+            )
+        else:
+            filter_complex_parts.append(
+                f"[0:a]volume={mix}[a0];[1:a]volume=1.0[a1];"
+                "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a_out]"
+            )
+        audio_map = "[a_out]"
     else:
-        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
-    if srt_path is not None:
-        cmd += ["-map", "2:s:0", "-c:s", "mov_text", "-metadata:s:s:0", "language=vie"]
+        audio_map = "1:a:0"
+
+    # Kết nối filter_complex vào lệnh FFmpeg
+    if filter_complex_parts:
+        cmd += ["-filter_complex", ";".join(filter_complex_parts)]
+        if cur_v.startswith("v_"):
+            cmd += ["-map", f"[{cur_v}]"]
+        else:
+            cmd += ["-map", "0:v:0"]
+        cmd += ["-map", audio_map]
+    else:
+        cmd += ["-map", "0:v:0", "-map", audio_map]
+
+    if need_video_encode:
+        cmd += _get_video_encode_args(video_quality=video_quality)
+    else:
+        cmd += ["-c:v", "copy"]
+
     cmd += [
-        "-c:v",
-        "copy",
         "-c:a",
         "aac",
         "-b:a",
@@ -120,9 +284,159 @@ def mux_audio(
         "+faststart",
         str(tmp),
     ]
-    _run(cmd)
+
+    try:
+        _run(cmd)
+    except Exception:
+        # Fallback về libx264 CRF 18 nếu GPU encoder gặp vấn đề
+        if need_video_encode and "h264_mf" in cmd:
+            fallback_cmd = []
+            skip = False
+            for c in cmd:
+                if skip:
+                    skip = False
+                    continue
+                if c == "h264_mf":
+                    fallback_cmd.append("libx264")
+                elif c in ("-rate_control", "-quality", "-b:v", "-maxrate", "-bufsize"):
+                    skip = True
+                    continue
+                else:
+                    fallback_cmd.append(c)
+            idx = fallback_cmd.index("libx264")
+            fallback_cmd[idx + 1:idx + 1] = ["-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
+            _run(fallback_cmd)
+        else:
+            raise
+
     tmp.replace(output_path)
     return output_path
+
+
+def remix_video(
+    video_path: Path,
+    output_path: Path,
+    anti_video: bool = True,
+    anti_audio: bool = True,
+    watermark_enabled: bool = False,
+    watermark_path: Path | str | None = None,
+    watermark_opacity: float = 0.18,
+    watermark_motion: str = "drift",
+    video_quality: str = "high",
+    srt_path: Path | None = None,
+    burn_sub: bool = False,
+    font_name: str = "Arial",
+    font_size: int = 11,
+    sub_style: str = "white_box",
+) -> Path:
+    """Xử lý video nhanh không cần dịch:
+    - Biến điệu âm thanh gốc (giữ tiếng gốc nhưng phá vỡ Acoustic Fingerprint).
+    - Xử lý hình ảnh chống quét (Micro-Crop 1.5%, Film grain, Micro-EQ).
+    - Chèn Watermark/Logo mờ chuyển động.
+    - Tùy chọn in phụ đề nếu có file srt.
+    - Mã hóa chất lượng cao (mặc định CRF 18).
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = output_path.with_name(output_path.stem + ".tmp" + output_path.suffix)
+
+    cmd = ["ffmpeg", "-y", "-hwaccel", "auto", "-i", str(video_path)]
+
+    has_wm = bool(watermark_enabled and watermark_path and Path(watermark_path).exists())
+    if has_wm:
+        cmd += ["-loop", "1", "-i", str(Path(watermark_path).resolve())]
+
+    filter_complex_parts: list[str] = []
+    cur_v = "0:v"
+    need_video_encode = False
+
+    # 1. Bộ lọc hình ảnh chống quét bản quyền
+    if anti_video:
+        filter_complex_parts.append(f"[{cur_v}]{get_visual_anti_detect_filter()}[v_anti]")
+        cur_v = "v_anti"
+        need_video_encode = True
+
+    # 2. Chèn Logo chuyển động
+    if has_wm:
+        from .watermark import get_watermark_motion_expr
+
+        x_expr, y_expr = get_watermark_motion_expr(watermark_motion)
+        op = max(0.03, min(1.0, float(watermark_opacity or 0.18)))
+        filter_complex_parts.append(
+            f"[1:v]format=rgba,colorchannelmixer=aa={op:.2f},scale=180:-1[wm_ready]"
+        )
+        filter_complex_parts.append(
+            f"[{cur_v}][wm_ready]overlay=x='{x_expr}':y='{y_expr}':shortest=1[v_wm]"
+        )
+        cur_v = "v_wm"
+        need_video_encode = True
+
+    # 3. Chèn phụ đề nếu có
+    if burn_sub and srt_path is not None and Path(srt_path).exists():
+        srt_escaped = (
+            str(Path(srt_path).resolve())
+            .replace("\\", "/")
+            .replace(":", "\\:")
+            .replace("'", r"\'")
+        )
+        style = get_subtitle_ass_style(font_name=font_name, font_size=font_size, sub_style=sub_style)
+        filter_complex_parts.append(f"[{cur_v}]subtitles='{srt_escaped}':force_style='{style}'[v_sub]")
+        cur_v = "v_sub"
+        need_video_encode = True
+
+    # 4. Biến điệu âm thanh gốc
+    audio_map = "0:a:0"
+    if anti_audio:
+        filter_complex_parts.append(f"[0:a]{get_audio_anti_detect_filter()}[a_anti]")
+        audio_map = "[a_anti]"
+
+    if filter_complex_parts:
+        cmd += ["-filter_complex", ";".join(filter_complex_parts)]
+        if cur_v.startswith("v_"):
+            cmd += ["-map", f"[{cur_v}]"]
+        else:
+            cmd += ["-map", "0:v:0"]
+        cmd += ["-map", audio_map]
+    else:
+        cmd += ["-map", "0:v:0", "-map", "0:a:0"]
+
+    if need_video_encode:
+        cmd += _get_video_encode_args(video_quality=video_quality)
+    else:
+        cmd += ["-c:v", "copy"]
+
+    if anti_audio:
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
+    else:
+        cmd += ["-c:a", "copy"]
+
+    cmd += ["-movflags", "+faststart", str(tmp)]
+
+    try:
+        _run(cmd)
+    except Exception:
+        if need_video_encode and "h264_mf" in cmd:
+            fallback_cmd = []
+            skip = False
+            for c in cmd:
+                if skip:
+                    skip = False
+                    continue
+                if c == "h264_mf":
+                    fallback_cmd.append("libx264")
+                elif c in ("-rate_control", "-quality", "-b:v", "-maxrate", "-bufsize"):
+                    skip = True
+                    continue
+                else:
+                    fallback_cmd.append(c)
+            idx = fallback_cmd.index("libx264")
+            fallback_cmd[idx + 1:idx + 1] = ["-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
+            _run(fallback_cmd)
+        else:
+            raise
+
+    tmp.replace(output_path)
+    return output_path
+
 
 
 def burn_subtitles(
@@ -130,44 +444,26 @@ def burn_subtitles(
     srt_path: Path,
     output_path: Path,
     font_name: str = "Arial",
-    font_size: int = 22,
+    font_size: int = 11,
+    sub_style: str = "white_box",
+    video_quality: str = "high",
+    anti_video: bool = False,
+    anti_audio: bool = False,
 ) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output_path.with_name(output_path.stem + ".tmp" + output_path.suffix)
-    srt_escaped = (
-        str(srt_path.resolve())
-        .replace("\\", "/")
-        .replace(":", "\\:")
-        .replace("'", r"\'")
+    return remix_video(
+        video_path=video_path,
+        output_path=output_path,
+        anti_video=anti_video,
+        anti_audio=anti_audio,
+        video_quality=video_quality,
+        srt_path=srt_path,
+        burn_sub=True,
+        font_name=font_name,
+        font_size=font_size,
+        sub_style=sub_style,
     )
-    style = (
-        f"FontName={font_name},FontSize={font_size},"
-        "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
-        "BorderStyle=1,Outline=2,Shadow=0,MarginV=28"
-    )
-    vf = f"subtitles='{srt_escaped}':force_style='{style}'"
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(video_path),
-        "-vf",
-        vf,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        "20",
-        "-c:a",
-        "copy",
-        "-movflags",
-        "+faststart",
-        str(tmp),
-    ]
-    _run(cmd)
-    tmp.replace(output_path)
-    return output_path
+
+
 
 
 def soft_subs(video_path: Path, srt_path: Path, output_path: Path) -> Path:

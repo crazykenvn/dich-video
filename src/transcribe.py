@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .config import WHISPER_LANG_MAP
 
@@ -22,6 +22,9 @@ class Segment:
     @property
     def duration(self) -> float:
         return max(0.0, self.end - self.start)
+
+
+_GLOBAL_WHISPER_CACHE: dict[tuple[str, str, str], Any] = {}
 
 
 class Transcriber:
@@ -45,19 +48,56 @@ class Transcriber:
         compute = self.compute_type
         if device == "auto":
             try:
-                import torch
+                import ctranslate2
 
-                device = "cuda" if torch.cuda.is_available() else "cpu"
+                device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
             except Exception:
-                device = "cpu"
+                try:
+                    import torch
+
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                except Exception:
+                    device = "cpu"
         if compute == "auto":
             compute = "float16" if device == "cuda" else "int8"
 
-        self._model = WhisperModel(
-            self.model_size,
-            device=device,
-            compute_type=compute,
-        )
+        cache_key = (self.model_size, device, compute)
+        if cache_key in _GLOBAL_WHISPER_CACHE:
+            self._model = _GLOBAL_WHISPER_CACHE[cache_key]
+            return self._model
+
+        # Đăng ký thư mục DLL của NVIDIA trên Windows (cublas, cudnn)
+        import sys, os
+        if sys.platform == "win32":
+            for p in sys.path:
+                for sub in [("nvidia", "cublas", "bin"), ("nvidia", "cudnn", "bin"), ("nvidia", "cuda_nvrtc", "bin")]:
+                    d = os.path.join(p, *sub)
+                    if os.path.isdir(d):
+                        try:
+                            os.add_dll_directory(d)
+                        except Exception:
+                            pass
+                        if d not in os.environ.get("PATH", ""):
+                            os.environ["PATH"] = d + ";" + os.environ.get("PATH", "")
+
+        try:
+            self._model = WhisperModel(
+                self.model_size,
+                device=device,
+                compute_type=compute,
+            )
+        except Exception as exc:
+            err_str = str(exc).lower()
+            if device == "cuda" and ("cublas" in err_str or "cudnn" in err_str or "dll" in err_str or "library" in err_str):
+                print(f"\n[Cảnh báo] Chưa load được CUDA DLL ({exc}). Tự động chuyển sang CPU để tiếp tục không bị gián đoạn...")
+                self._model = WhisperModel(
+                    self.model_size,
+                    device="cpu",
+                    compute_type="int8",
+                )
+            else:
+                raise
+        _GLOBAL_WHISPER_CACHE[cache_key] = self._model
         return self._model
 
     def run(
