@@ -26,6 +26,41 @@ DOUYIN_PC_UA = (
 )
 
 
+def save_netscape_cookies(cookies: list[dict[str, Any]], file_path: Path) -> None:
+    """Lưu danh sách cookie từ Playwright theo đúng định dạng chuẩn Netscape HTTP Cookie File."""
+    lines = ["# Netscape HTTP Cookie File\n"]
+    for c in cookies:
+        domain = c.get("domain", "")
+        flag = "TRUE" if domain.startswith(".") else "FALSE"
+        path = c.get("path", "/")
+        secure = "TRUE" if c.get("secure", False) else "FALSE"
+        expires = int(c.get("expires", -1))
+        if expires <= 0:
+            expires = int(time.time()) + 86400 * 365
+        name = c.get("name", "")
+        value = c.get("value", "")
+        lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+    file_path.write_text("".join(lines), encoding="utf-8")
+
+
+def load_cookie_header(file_path: Path) -> str:
+    """Đọc file cookie (dù là Netscape hay chuỗi raw) thành Header Cookie dạng name=val; name2=val2."""
+    if not file_path.exists() or file_path.stat().st_size == 0:
+        return ""
+    content = file_path.read_text(encoding="utf-8", errors="ignore").strip()
+    if content.startswith("# Netscape") or "\t" in content:
+        parts = []
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            cols = line.split("\t")
+            if len(cols) >= 7:
+                parts.append(f"{cols[5]}={cols[6]}")
+        return "; ".join(parts)
+    return content
+
+
 class DouyinDownloader:
     """Tải video Douyin không watermark kết hợp Browser Context Hooking để vượt WAF."""
 
@@ -35,7 +70,7 @@ class DouyinDownloader:
         if cookies:
             self.session.headers.update({"Cookie": cookies})
         elif DOUYIN_COOKIE_FILE.exists() and DOUYIN_COOKIE_FILE.stat().st_size > 0:
-            saved_cookie = DOUYIN_COOKIE_FILE.read_text(encoding="utf-8", errors="ignore").strip()
+            saved_cookie = load_cookie_header(DOUYIN_COOKIE_FILE)
             if saved_cookie:
                 self.session.headers.update({"Cookie": saved_cookie})
 
@@ -189,12 +224,11 @@ class DouyinDownloader:
                     except Exception:
                         pass
 
-                # Lưu cookies phiên duyệt để dùng cho requests
+                # Lưu cookies phiên duyệt theo chuẩn Netscape để dùng cho cả requests và yt-dlp
                 try:
                     cookies = context.cookies()
-                    cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
-                    if cookie_str:
-                        DOUYIN_COOKIE_FILE.write_text(cookie_str, encoding="utf-8")
+                    if cookies:
+                        save_netscape_cookies(cookies, DOUYIN_COOKIE_FILE)
                 except Exception:
                     pass
 

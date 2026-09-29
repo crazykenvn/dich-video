@@ -194,10 +194,59 @@ Danh sách câu thoại cần dịch:
                 except Exception as e:
                     logger.debug(f"Exception khi gọi Gemini {model_name}: {e}")
 
-            # Nếu tất cả models trong 1 key đều 429/503
-            self.mark_rate_limited(key)
-
         return {}
+
+    def translate_title(self, text: str, target_lang: str = "en") -> str:
+        """Dịch tiêu đề video mạng xã hội sang tiếng Anh ngắn gọn, chuẩn tên file."""
+        if not text or not text.strip():
+            return "video"
+
+        clean_text = text.strip()
+        # Nếu không có ký tự Trung/Á thì giữ nguyên
+        if not re.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", clean_text):
+            return clean_text
+
+        # Bỏ hashtag thừa trước khi gửi dịch
+        text_no_tags = re.sub(r"#\S+", "", clean_text).strip()
+        if not text_no_tags:
+            text_no_tags = clean_text
+
+        if self.slots:
+            prompt = (
+                "Translate the following social media video title into natural, concise English suitable for a video title or file name. "
+                "Do not include hashtags, quotes, or conversational explanations. Return ONLY the English translation.\n\n"
+                f"Title: {text_no_tags}"
+            )
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.1},
+            }
+            attempts = 0
+            while attempts < min(len(self.slots) * 2, 4):
+                attempts += 1
+                key = self.get_next_key()
+                if not key:
+                    break
+                headers = {"Content-Type": "application/json", "X-goog-api-key": key}
+                for model_name in PRIMARY_MODELS:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+                    try:
+                        resp = requests.post(url, headers=headers, json=payload, timeout=12)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            candidates = data.get("candidates", [])
+                            if candidates:
+                                trans = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                                trans = trans.replace('"', "").replace("'", "").strip()
+                                if trans:
+                                    return trans
+                        elif resp.status_code in (429, 503):
+                            continue
+                    except Exception:
+                        pass
+                self.mark_rate_limited(key)
+
+        return clean_text
 
 
 _SHARED_ROTATOR: GeminiRotator | None = None

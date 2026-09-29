@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..config import OUTPUT_DIR
+from ..gemini_rotator import get_shared_rotator
 from .bilibili_engine import BilibiliDownloader
 from .db import (
     get_accounts,
@@ -99,11 +100,37 @@ class DownloadManager:
         for idx, item in enumerate(new_videos):
             vid_id = item["id"]
             title = item.get("title", f"video_{vid_id}")
-            safe_name = sanitize_filename(title)
+
+            # 1. Tự động dịch tiêu đề sang tiếng Anh nếu chứa ký tự tiếng Trung/châu Á
+            display_title = title
+            if re.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", title):
+                try:
+                    rotator = get_shared_rotator()
+                    en_title = rotator.translate_title(title, target_lang="en")
+                    if en_title and en_title != title:
+                        display_title = en_title
+                except Exception:
+                    pass
+
+            safe_name = sanitize_filename(display_title)
             dest_file = target_dir / f"{safe_name}_{vid_id}.mp4"
 
             pct = 0.2 + (0.4 * (idx / len(new_videos)))
-            report(f"Đang tải ({idx+1}/{len(new_videos)}): {title[:35]}…", pct)
+            report(f"Đang tải ({idx+1}/{len(new_videos)}): {display_title[:35]}…", pct)
+
+            # 2. Kiểm tra chống trùng lặp lớp 2: File đã có trên ổ cứng
+            if dest_file.exists() and dest_file.stat().st_size > 1024 * 100:
+                report(f"Video {vid_id} đã có sẵn trên đĩa, ghi nhận vào Inbox.", pct)
+                record_download(
+                    account_id=account_id,
+                    platform=platform,
+                    platform_video_id=vid_id,
+                    title=display_title,
+                    raw_video_path=str(dest_file),
+                    processed_status="inbox",
+                )
+                downloaded_paths.append(dest_file)
+                continue
 
             download_ok = False
             try:
@@ -133,7 +160,7 @@ class DownloadManager:
                     account_id=account_id,
                     platform=platform,
                     platform_video_id=vid_id,
-                    title=title,
+                    title=display_title,
                     raw_video_path=str(dest_file),
                     processed_status="inbox",
                 )
