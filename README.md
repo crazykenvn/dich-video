@@ -126,12 +126,29 @@ python cli.py "D:\video_goc" --output "D:\video_dich" --mode dub --video-quality
 python cli.py "D:\video_goc" --output "D:\video_remix" --mode remix --watermark-text "@KENVN" --watermark-opacity 0.18
 ```
 
-#### 4. Chỉ xuất phụ đề cứng (Hardsub)
+#### 5. 📡 Tự Động Tải & Xử Lý Theo Tài Khoản (Facebook, Instagram, Douyin, TikTok, Bilibili)
+Hệ thống hỗ trợ tự động theo dõi danh sách tác giả/kênh, tự phát hiện video mới xuất bản và tự động nạp vào luồng xử lý:
+
 ```bash
-python cli.py "D:\input.mp4" --mode hard --sub-style white_box
+# Thêm kênh theo dõi mới:
+python download_cli.py add --platform douyin --url "https://www.douyin.com/user/MS4wLjAB..." --name "Kênh Douyin" --mode remix
+python download_cli.py add --platform bilibili --url "https://space.bilibili.com/123456" --name "Bilibili Space" --mode dub
+python download_cli.py add --platform tiktok --url "https://www.tiktok.com/@username" --name "TikTok Creator" --mode remix
+
+# Xem danh sách các kênh đang theo dõi:
+python download_cli.py list
+
+# Quét và tải các video mới nhất từ tất cả kênh đang bật:
+python download_cli.py scan --max 5
+
+# Xem lịch sử video đã tải và trạng thái xử lý:
+python download_cli.py history
 ```
 
+*(Hoặc mở giao diện Web qua `Chay-Giao-Dien.bat` và chuyển sang tab **"📡 Tự Động Cào Kênh"** để thao tác trực quan bằng chuột).*
+
 ---
+
 
 ## 📊 Bảng Chế Độ Xuất (Modes)
 

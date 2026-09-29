@@ -13,3 +13,6 @@ srt>=3.5.3
 langdetect>=1.0.9
 tqdm>=4.66.0
 python-dotenv>=1.0.1
+yt-dlp>=2024.0.0
+requests>=2.28.0
+
