@@ -201,58 +201,54 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
     w, h = get_video_resolution(raw_path)
     aspect_label = "Dọc 9:16 (Shorts/Reels/Douyin)" if w < h else "Ngang 16:9 (Landscape)"
 
-    st.markdown(f"**Video:** {v['title'][:65] if v['title'] else f'Video_{v['platform_video_id']}'}")
-    c_m1, c_m2, c_m3 = st.columns(3)
-    with c_m1:
-        st.caption(f"📏 Độ phân giải thực tế: **{w} × {h} px**")
-    with c_m2:
-        st.caption(f"📱 Tỷ lệ: **{aspect_label}**")
-    with c_m3:
-        sz = round(raw_path.stat().st_size / (1024 * 1024), 1)
-        st.caption(f"📁 Dung lượng: **{sz} MB**")
+    st.markdown(f"**🎬 Video:** {v['title'][:65] if v['title'] else f'Video_{v['platform_video_id']}'}")
 
-    # Thanh trượt chọn thời điểm xuất hiện phụ đề chữ Trung để căn chỉnh
-    c_sec, c_info = st.columns([2, 1], vertical_alignment="bottom")
-    with c_sec:
-        seek_sec = st.slider(
-            "⏱️ Chọn giây xuất hiện sub chữ Trung để căn chỉnh:",
-            min_value=0.5,
-            max_value=30.0,
-            value=float(st.session_state.get(f"seek_sec_{vid_id}", 1.5)),
-            step=0.5,
-            key=f"slider_seek_{vid_id}",
+    col_left, col_right = st.columns([1.6, 1.0], gap="medium")
+
+    with col_left:
+        # Thanh trượt chọn thời điểm xuất hiện phụ đề chữ Trung để căn chỉnh
+        c_sec, c_info = st.columns([2, 1], vertical_alignment="bottom")
+        with c_sec:
+            seek_sec = st.slider(
+                "⏱️ Chọn giây xuất hiện sub chữ Trung:",
+                min_value=0.5,
+                max_value=30.0,
+                value=float(st.session_state.get(f"seek_sec_{vid_id}", 1.5)),
+                step=0.5,
+                key=f"slider_seek_{vid_id}",
+            )
+        with c_info:
+            st.caption("Kéo chọn frame có chữ rõ nhất")
+
+        # 2. Trích xuất frame hình
+        with st.spinner("Đang trích xuất khung hình..."):
+            img_b64 = extract_preview_frame(raw_path, timestamp_sec=seek_sec)
+
+        cur_margin_v = int(st.session_state.get(f"active_margin_v_{vid_id}", 40))
+        cur_style = st.session_state.get(f"active_style_{vid_id}", "solid_black")
+
+        # 3. Custom component kéo thả trực quan
+        res = subtitle_drag_picker(
+            image_b64=img_b64,
+            video_width=w,
+            video_height=h,
+            default_margin_v=cur_margin_v,
+            sub_style=cur_style,
+            sample_text="Đây là phụ đề tiếng Việt mẫu đè lên chữ gốc",
+            key=f"drag_cmp_{vid_id}_{int(seek_sec*10)}",
         )
-    with c_info:
-        st.caption("Kéo thanh để trích xuất frame có chữ tiếng Trung rõ nhất.")
 
-    # 2. Trích xuất frame hình
-    with st.spinner("Đang trích xuất khung hình..."):
-        img_b64 = extract_preview_frame(raw_path, timestamp_sec=seek_sec)
+        if res and isinstance(res, dict) and "margin_v" in res:
+            dragged_margin = int(res["margin_v"])
+            if dragged_margin != cur_margin_v:
+                st.session_state[f"active_margin_v_{vid_id}"] = dragged_margin
+                cur_margin_v = dragged_margin
 
-    # 3. Custom component kéo thả trực quan
-    cur_margin_v = int(st.session_state.get(f"active_margin_v_{vid_id}", 40))
-    cur_style = st.session_state.get(f"active_style_{vid_id}", "solid_black")
+    with col_right:
+        st.markdown("#### ⚙️ Cấu Hình Đè Sub")
+        sz = round(raw_path.stat().st_size / (1024 * 1024), 1)
+        st.info(f"📏 **Gốc:** `{w}×{h}` ({aspect_label})\n\n📁 **Size:** `{sz} MB`")
 
-    res = subtitle_drag_picker(
-        image_b64=img_b64,
-        video_width=w,
-        video_height=h,
-        default_margin_v=cur_margin_v,
-        sub_style=cur_style,
-        sample_text="Đây là phụ đề tiếng Việt mẫu đè lên chữ gốc",
-        key=f"drag_cmp_{vid_id}_{int(seek_sec*10)}",
-    )
-
-    if res and isinstance(res, dict) and "margin_v" in res:
-        dragged_margin = int(res["margin_v"])
-        if dragged_margin != cur_margin_v:
-            st.session_state[f"active_margin_v_{vid_id}"] = dragged_margin
-            cur_margin_v = dragged_margin
-
-    # 4. Tinh chỉnh kiểu che và độ cao pixel
-    st.markdown("---")
-    col_k1, col_k2, col_k3 = st.columns([1.5, 1.2, 2.3])
-    with col_k1:
         new_style = st.selectbox(
             "Kiểu che phụ đề:",
             ["solid_black", "solid_white", "black_box", "white_box", "classic"],
@@ -270,7 +266,6 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
             st.session_state[f"active_style_{vid_id}"] = new_style
             st.rerun()
 
-    with col_k2:
         chosen_pos = st.selectbox(
             "Vùng đặt sub:",
             ["bottom", "middle", "top"],
@@ -279,7 +274,6 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
             key=f"select_pos_{vid_id}",
         )
 
-    with col_k3:
         manual_margin = st.slider(
             "Toạ độ MarginV thực tế (px):",
             min_value=5,
@@ -293,10 +287,11 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
             st.session_state[f"active_margin_v_{vid_id}"] = manual_margin
             cur_margin_v = manual_margin
 
-    # 5. Nút bấm thực thi
-    col_act1, col_act2 = st.columns([2, 1])
-    with col_act1:
-        if st.button("🚀 BẮT ĐẦU DỊCH & ĐÈ SUB CHÍNH XÁC", type="primary", use_container_width=True):
+        pct = round((cur_margin_v / h) * 100, 1)
+        st.metric("Toạ độ đè sub", f"{cur_margin_v} px", delta=f"{pct}% từ đáy")
+
+        st.markdown("---")
+        if st.button("🚀 BẮT ĐẦU DỊCH & ĐÈ SUB", type="primary", use_container_width=True):
             custom_cfg = {
                 "sub_position": chosen_pos,
                 "sub_style": new_style,
@@ -312,7 +307,6 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
             except Exception as e:
                 st.error(f"Lỗi: {e}")
 
-    with col_act2:
         if st.button("❌ Đóng lại", use_container_width=True):
             st.session_state["show_sub_dialog_for"] = None
             st.rerun()
@@ -542,56 +536,9 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                                 st.error(f"Lỗi: {e}")
 
                 with col_btn_d:
-                    with st.popover("🎙️ Dịch", help="Dịch & Lồng tiếng AI (Tùy chỉnh vị trí đè Sub)"):
-                        if st.button("🎯 KÉO THẢ ĐÈ SUB (Trực quan)", key=f"tbl_open_dlg_{vid_id}", type="primary", use_container_width=True):
-                            st.session_state["show_sub_dialog_for"] = vid_id
-                            st.rerun()
-                        st.markdown("---")
-                        st.caption("Hoặc tùy chỉnh nhanh:")
-                        c_p1, c_p2 = st.columns(2)
-                        with c_p1:
-                            v_sub_pos = st.selectbox(
-                                "Vị trí đặt sub:",
-                                ["bottom", "middle", "top"],
-                                format_func=lambda x: {"bottom": "Dưới đáy (Bottom)", "middle": "Giữa video", "top": "Trên đỉnh"}[x],
-                                key=f"tbl_vpos_{vid_id}",
-                            )
-                        with c_p2:
-                            v_sub_style = st.selectbox(
-                                "Kiểu che sub:",
-                                ["solid_black", "solid_white", "black_box", "white_box", "classic"],
-                                format_func=lambda x: {
-                                    "solid_black": "⬛ Hộp đen đặc (Đè sub)",
-                                    "solid_white": "⬜ Hộp trắng đặc",
-                                    "black_box": "◾ Hộp đen mờ 60%",
-                                    "white_box": "◽ Hộp trắng mờ 60%",
-                                    "classic": "🔤 Chữ viền",
-                                }[x],
-                                key=f"tbl_vstyle_{vid_id}",
-                            )
-                        v_margin_v = st.slider(
-                            "Độ cao cách đáy (MarginV px):",
-                            min_value=5,
-                            max_value=300,
-                            value=35,
-                            step=5,
-                            key=f"tbl_vmarg_{vid_id}",
-                            help="Đẩy phụ đề dịch lên cao để che hoàn toàn phụ đề gốc.",
-                        )
-                        if st.button("🚀 Bắt đầu Dịch & Đè Sub", key=f"tbl_rundub_{vid_id}", type="primary", use_container_width=True):
-                            with st.spinner("Đang dịch & lồng tiếng…"):
-                                try:
-                                    custom_cfg = {
-                                        "sub_position": v_sub_pos,
-                                        "sub_style": v_sub_style,
-                                        "sub_margin_v": v_margin_v,
-                                    }
-                                    reset_video_status(vid_id)
-                                    manager.process_inbox_video(v, mode="dub", settings=custom_cfg)
-                                    st.session_state[f"sel_vid_{vid_id}"] = False
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Lỗi: {e}")
+                    if st.button("🎙️ Dịch & Căn Sub", key=f"tbl_open_dlg_{vid_id}", type="primary", use_container_width=True, help="Mở giao diện kéo thả đè sub trực quan"):
+                        st.session_state["show_sub_dialog_for"] = vid_id
+                        st.rerun()
 
                 with col_btn_x:
                     if st.button("🗑️", key=f"tbl_x_{vid_id}", help="Bỏ qua video này"):
@@ -641,52 +588,9 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                             except Exception as e:
                                 st.error(f"Lỗi: {e}")
                     with col_b2:
-                        with st.popover("🎙️ Dịch", help="Dịch & Lồng tiếng AI (Tùy chỉnh vị trí đè Sub)", use_container_width=True):
-                            if st.button("🎯 KÉO THẢ ĐÈ SUB", key=f"grid_open_dlg_{vid_id}", type="primary", use_container_width=True):
-                                st.session_state["show_sub_dialog_for"] = vid_id
-                                st.rerun()
-                            st.markdown("---")
-                            st.caption("Hoặc tùy chỉnh nhanh:")
-                            gv_sub_pos = st.selectbox(
-                                "Vị trí đặt sub:",
-                                ["bottom", "middle", "top"],
-                                format_func=lambda x: {"bottom": "Dưới đáy (Bottom)", "middle": "Giữa video", "top": "Trên đỉnh"}[x],
-                                key=f"grid_vpos_{vid_id}",
-                            )
-                            gv_sub_style = st.selectbox(
-                                "Kiểu che sub:",
-                                ["solid_black", "solid_white", "black_box", "white_box", "classic"],
-                                format_func=lambda x: {
-                                    "solid_black": "⬛ Hộp đen đặc (Đè sub)",
-                                    "solid_white": "⬜ Hộp trắng đặc",
-                                    "black_box": "◾ Hộp đen mờ 60%",
-                                    "white_box": "◽ Hộp trắng mờ 60%",
-                                    "classic": "🔤 Chữ viền",
-                                }[x],
-                                key=f"grid_vstyle_{vid_id}",
-                            )
-                            gv_margin_v = st.slider(
-                                "Độ cao cách đáy (MarginV px):",
-                                min_value=5,
-                                max_value=300,
-                                value=35,
-                                step=5,
-                                key=f"grid_vmarg_{vid_id}",
-                                help="Đẩy phụ đề dịch lên cao để che hoàn toàn phụ đề gốc.",
-                            )
-                            if st.button("🚀 Bắt đầu Dịch", key=f"grid_rundub_{vid_id}", type="primary", use_container_width=True):
-                                try:
-                                    custom_cfg = {
-                                        "sub_position": gv_sub_pos,
-                                        "sub_style": gv_sub_style,
-                                        "sub_margin_v": gv_margin_v,
-                                    }
-                                    reset_video_status(vid_id)
-                                    manager.process_inbox_video(v, mode="dub", settings=custom_cfg)
-                                    st.session_state[f"sel_vid_{vid_id}"] = False
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Lỗi: {e}")
+                        if st.button("🎙️ Dịch & Căn Sub", key=f"grid_open_dlg_{vid_id}", type="primary", use_container_width=True, help="Mở giao diện kéo thả đè sub trực quan"):
+                            st.session_state["show_sub_dialog_for"] = vid_id
+                            st.rerun()
                     with col_b3:
                         if st.button("🗑️", key=f"grid_x_{vid_id}", use_container_width=True):
                             mark_as_skipped(vid_id)

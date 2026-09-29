@@ -92,7 +92,7 @@
     }
     #preview-img {
       display: block;
-      max-height: 440px;
+      max-height: 360px;
       max-width: 100%;
       width: auto;
       height: auto;
@@ -233,7 +233,7 @@
 
     function notifyHeight() {
       const height = document.documentElement.scrollHeight || document.body.scrollHeight;
-      sendToStreamlit('streamlit:setFrameHeight', { height: Math.max(height, 530) });
+      sendToStreamlit('streamlit:setFrameHeight', { height: Math.max(height, 460) });
     }
 
     function emitValue(marginV) {
