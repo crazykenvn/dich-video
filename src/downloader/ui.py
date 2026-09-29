@@ -225,29 +225,51 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
             img_b64 = extract_preview_frame(raw_path, timestamp_sec=seek_sec)
 
         cur_margin_v = int(st.session_state.get(f"active_margin_v_{vid_id}", 40))
+        cur_font_size = int(st.session_state.get(f"active_font_size_{vid_id}", 16))
+        cur_box_padding = int(st.session_state.get(f"active_box_padding_{vid_id}", 5))
+        cur_box_width = int(st.session_state.get(f"active_box_width_{vid_id}", 92))
         cur_style = st.session_state.get(f"active_style_{vid_id}", "solid_black")
 
-        # 3. Custom component kéo thả trực quan
+        # 3. Custom component kéo thả & co giãn trực quan
         res = subtitle_drag_picker(
             image_b64=img_b64,
             video_width=w,
             video_height=h,
             default_margin_v=cur_margin_v,
+            font_size=cur_font_size,
+            box_padding=cur_box_padding,
+            box_width=cur_box_width,
             sub_style=cur_style,
             sample_text="Đây là phụ đề tiếng Việt mẫu đè lên chữ gốc",
             key=f"drag_cmp_{vid_id}_{int(seek_sec*10)}",
         )
 
-        if res and isinstance(res, dict) and "margin_v" in res:
-            dragged_margin = int(res["margin_v"])
-            if dragged_margin != cur_margin_v:
-                st.session_state[f"active_margin_v_{vid_id}"] = dragged_margin
-                cur_margin_v = dragged_margin
+        if res and isinstance(res, dict):
+            if "margin_v" in res:
+                dragged_margin = int(res["margin_v"])
+                if dragged_margin != cur_margin_v:
+                    st.session_state[f"active_margin_v_{vid_id}"] = dragged_margin
+                    cur_margin_v = dragged_margin
+            if "font_size" in res:
+                dragged_fs = int(res["font_size"])
+                if dragged_fs != cur_font_size:
+                    st.session_state[f"active_font_size_{vid_id}"] = dragged_fs
+                    cur_font_size = dragged_fs
+            if "box_padding" in res:
+                dragged_pad = int(res["box_padding"])
+                if dragged_pad != cur_box_padding:
+                    st.session_state[f"active_box_padding_{vid_id}"] = dragged_pad
+                    cur_box_padding = dragged_pad
+            if "box_width" in res:
+                dragged_w = int(res["box_width"])
+                if dragged_w != cur_box_width:
+                    st.session_state[f"active_box_width_{vid_id}"] = dragged_w
+                    cur_box_width = dragged_w
 
     with col_right:
         st.markdown("#### ⚙️ Cấu Hình Đè Sub")
         sz = round(raw_path.stat().st_size / (1024 * 1024), 1)
-        st.info(f"📏 **Gốc:** `{w}×{h}` ({aspect_label})\n\n📁 **Size:** `{sz} MB`")
+        st.caption(f"📏 Gốc: `{w}×{h}` ({aspect_label}) | 📁 Size: `{sz} MB`")
 
         new_style = st.selectbox(
             "Kiểu che phụ đề:",
@@ -275,7 +297,7 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
         )
 
         manual_margin = st.slider(
-            "Toạ độ MarginV thực tế (px):",
+            "Toạ độ MarginV cách đáy (px):",
             min_value=5,
             max_value=max(300, h - 50),
             value=min(max(5, cur_margin_v), max(300, h - 50)),
@@ -287,8 +309,51 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
             st.session_state[f"active_margin_v_{vid_id}"] = manual_margin
             cur_margin_v = manual_margin
 
+        # Sliders cho Cỡ chữ & Kích thước ô sub
+        c_s1, c_s2 = st.columns(2)
+        with c_s1:
+            manual_fs = st.slider(
+                "🔤 Cỡ chữ (px):",
+                min_value=10,
+                max_value=45,
+                value=cur_font_size,
+                step=1,
+                help="Kích thước chữ tiếng Việt hiển thị trên video.",
+                key=f"slider_fs_{vid_id}",
+            )
+            if manual_fs != cur_font_size:
+                st.session_state[f"active_font_size_{vid_id}"] = manual_fs
+                cur_font_size = manual_fs
+
+        with c_s2:
+            manual_pad = st.slider(
+                "📦 Độ dày hộp (px):",
+                min_value=1,
+                max_value=25,
+                value=cur_box_padding,
+                step=1,
+                help="Tăng giảm độ dày của dải hộp đen để che kín phụ đề chữ Trung gốc.",
+                key=f"slider_pad_{vid_id}",
+            )
+            if manual_pad != cur_box_padding:
+                st.session_state[f"active_box_padding_{vid_id}"] = manual_pad
+                cur_box_padding = manual_pad
+
+        manual_w = st.slider(
+            "↔️ Chiều rộng hộp đè (%):",
+            min_value=50,
+            max_value=98,
+            value=cur_box_width,
+            step=2,
+            help="Độ rộng bề ngang của ô phụ đề che.",
+            key=f"slider_w_{vid_id}",
+        )
+        if manual_w != cur_box_width:
+            st.session_state[f"active_box_width_{vid_id}"] = manual_w
+            cur_box_width = manual_w
+
         pct = round((cur_margin_v / h) * 100, 1)
-        st.metric("Toạ độ đè sub", f"{cur_margin_v} px", delta=f"{pct}% từ đáy")
+        st.caption(f"📍 Vị trí: `{cur_margin_v}px` ({pct}% từ đáy) | 🔤 Chữ: `{cur_font_size}px` | 📦 Hộp dày: `{cur_box_padding}px`")
 
         st.markdown("---")
         if st.button("🚀 BẮT ĐẦU DỊCH & ĐÈ SUB", type="primary", use_container_width=True):
@@ -296,6 +361,8 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
                 "sub_position": chosen_pos,
                 "sub_style": new_style,
                 "sub_margin_v": cur_margin_v,
+                "font_size": cur_font_size,
+                "box_padding": cur_box_padding,
             }
             try:
                 reset_video_status(vid_id)

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Subtitle Drag & Drop Placement</title>
+  <title>Subtitle Drag & Drop Placement with Resize</title>
   <style>
     * {
       box-sizing: border-box;
@@ -31,18 +31,44 @@
       justify-content: space-between;
       align-items: center;
       width: 100%;
-      max-width: 640px;
-      background: rgba(30, 41, 59, 0.9);
+      max-width: 680px;
+      background: rgba(30, 41, 59, 0.95);
       border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 8px;
       padding: 6px 12px;
-      font-size: 13px;
+      font-size: 12px;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .hud-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(15, 23, 42, 0.6);
+      padding: 2px 6px;
+      border-radius: 5px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .btn-mini {
+      background: #334155;
+      color: #f8fafc;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      line-height: 1.2;
+    }
+    .btn-mini:hover {
+      background: #475569;
+      border-color: #38bdf8;
     }
     .badge {
       padding: 3px 8px;
       border-radius: 4px;
       font-weight: 600;
-      font-size: 12px;
+      font-size: 11px;
     }
     .badge-res {
       background: rgba(56, 189, 248, 0.15);
@@ -53,7 +79,7 @@
       background: rgba(34, 197, 94, 0.2);
       color: #22c55e;
       border: 1px solid rgba(34, 197, 94, 0.5);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
     }
     .presets {
@@ -62,15 +88,15 @@
       flex-wrap: wrap;
       justify-content: center;
       width: 100%;
-      max-width: 640px;
+      max-width: 680px;
     }
     .btn-preset {
       background: #1e293b;
       color: #cbd5e1;
       border: 1px solid rgba(255, 255, 255, 0.15);
       border-radius: 6px;
-      padding: 4px 10px;
-      font-size: 12px;
+      padding: 3px 8px;
+      font-size: 11px;
       cursor: pointer;
       transition: all 0.15s ease;
     }
@@ -105,7 +131,7 @@
       width: 92%;
       cursor: grab;
       border-radius: 4px;
-      padding: 6px 10px;
+      padding: 6px 12px;
       text-align: center;
       font-size: 13px;
       font-weight: 600;
@@ -133,6 +159,42 @@
       font-weight: 700;
       letter-spacing: 0.5px;
       pointer-events: none;
+      white-space: nowrap;
+    }
+    /* Edge Resize Handles */
+    .resize-handle {
+      position: absolute;
+      background: rgba(56, 189, 248, 0.85);
+      border-radius: 2px;
+      z-index: 15;
+    }
+    .handle-n {
+      top: -3px;
+      left: 20%;
+      width: 60%;
+      height: 6px;
+      cursor: ns-resize;
+    }
+    .handle-s {
+      bottom: -3px;
+      left: 20%;
+      width: 60%;
+      height: 6px;
+      cursor: ns-resize;
+    }
+    .handle-w {
+      left: -3px;
+      top: 20%;
+      width: 6px;
+      height: 60%;
+      cursor: ew-resize;
+    }
+    .handle-e {
+      right: -3px;
+      top: 20%;
+      width: 6px;
+      height: 60%;
+      cursor: ew-resize;
     }
     /* Styles */
     .style-solid_black {
@@ -162,10 +224,10 @@
       border: 1px dashed rgba(255,255,255,0.4);
     }
     .help-text {
-      font-size: 12px;
+      font-size: 11px;
       color: #94a3b8;
       text-align: center;
-      max-width: 640px;
+      max-width: 680px;
       line-height: 1.4;
     }
   </style>
@@ -174,25 +236,53 @@
   <div class="wrapper" id="app-wrapper">
     <!-- HUD BAR -->
     <div class="hud-header">
-      <span class="badge badge-res" id="lbl-res">📏 1080 × 1920 px</span>
-      <span id="lbl-preview-sz" style="color: #94a3b8; font-size: 11px;">Preview: ---</span>
+      <span class="badge badge-res" id="lbl-res">📏 1920 × 1080 px</span>
+
+      <!-- Font Size Adjuster -->
+      <div class="hud-group">
+        <span style="color: #94a3b8;">Cỡ chữ:</span>
+        <button class="btn-mini" onclick="adjustFontSize(-2)">A-</button>
+        <span id="lbl-fontsize" style="font-weight: 700; color: #38bdf8; min-width: 32px; text-align: center;">16px</span>
+        <button class="btn-mini" onclick="adjustFontSize(+2)">A+</button>
+      </div>
+
+      <!-- Box Thickness / Padding Adjuster -->
+      <div class="hud-group">
+        <span style="color: #94a3b8;">Độ dày hộp:</span>
+        <button class="btn-mini" onclick="adjustPadding(-1)">-</button>
+        <span id="lbl-padding" style="font-weight: 700; color: #fbbf24; min-width: 26px; text-align: center;">5px</span>
+        <button class="btn-mini" onclick="adjustPadding(+1)">+</button>
+      </div>
+
+      <!-- Box Width Adjuster -->
+      <div class="hud-group">
+        <span style="color: #94a3b8;">Rộng:</span>
+        <button class="btn-mini" onclick="adjustWidth(-5)">◀</button>
+        <span id="lbl-width" style="font-weight: 700; color: #a78bfa; min-width: 30px; text-align: center;">92%</span>
+        <button class="btn-mini" onclick="adjustWidth(+5)">▶</button>
+      </div>
+
       <span class="badge badge-margin" id="lbl-margin">🎯 MarginV: -- px</span>
     </div>
 
     <!-- PRESET SNAP BUTTONS -->
     <div class="presets">
       <button class="btn-preset" onclick="snapPercent(0.04)">⬇️ Đáy chuẩn (4%)</button>
-      <button class="btn-preset" onclick="snapPercent(0.08)">🎯 Che Sub gốc (8%)</button>
-      <button class="btn-preset" onclick="snapPercent(0.14)">🎯 Che Sub gốc (14%)</button>
-      <button class="btn-preset" onclick="snapPercent(0.20)">🎯 Che Sub gốc (20%)</button>
+      <button class="btn-preset" onclick="snapPercent(0.08)">🎯 Che Sub (8%)</button>
+      <button class="btn-preset" onclick="snapPercent(0.14)">🎯 Che Sub (14%)</button>
+      <button class="btn-preset" onclick="snapPercent(0.20)">🎯 Che Sub (20%)</button>
       <button class="btn-preset" onclick="snapPercent(0.50)">🎯 Giữa clip (50%)</button>
       <button class="btn-preset" onclick="snapPercent(0.88)">⬆️ Đỉnh (88%)</button>
     </div>
 
-    <!-- VIDEO FRAME PREVIEW & DRAGGABLE BOX -->
+    <!-- VIDEO FRAME PREVIEW & DRAGGABLE/RESIZABLE BOX -->
     <div class="stage-container" id="stage" onclick="onStageClick(event)">
       <img id="preview-img" alt="Video Frame Preview" src="" />
       <div id="sub-box" class="sub-box style-solid_black">
+        <div class="resize-handle handle-n" id="rh-n"></div>
+        <div class="resize-handle handle-s" id="rh-s"></div>
+        <div class="resize-handle handle-w" id="rh-w"></div>
+        <div class="resize-handle handle-e" id="rh-e"></div>
         <span class="drag-handle">↕️ KÉO ĐÈ SUB</span>
         <span id="sub-text">Đây là phụ đề tiếng Việt mẫu đè lên chữ gốc</span>
       </div>
@@ -200,26 +290,38 @@
 
     <!-- HELPER HINT -->
     <div class="help-text">
-      💡 <b>Cách dùng:</b> Kéo giữ hộp chữ nhật hoặc <b>click trực tiếp</b> vào dòng chữ tiếng Trung trên màn hình để đặt vị trí. Tọa độ <code>MarginV</code> (px) sẽ tự động khớp theo kích thước video gốc.
+      💡 <b>Cách dùng:</b> Kéo di chuyển ô sub hoặc click trực tiếp lên dòng chữ tiếng Trung. Có thể kéo <b>4 cạnh xanh</b> để chỉnh to/nhỏ hộp, hoặc bấm nút <b>A-/A+</b> để đổi cỡ chữ.
     </div>
   </div>
 
   <script>
     // State
-    let videoW = 1080;
-    let videoH = 1920;
+    let videoW = 1920;
+    let videoH = 1080;
     let currentMarginV = 40;
+    let fontSize = 16;
+    let boxPadding = 5;
+    let boxWidth = 92;
     let currentStyle = 'solid_black';
+
+    // Drag/Resize State
     let isDragging = false;
+    let isResizing = false;
+    let resizeMode = null; // 'n', 's', 'w', 'e'
     let dragStartY = 0;
+    let dragStartX = 0;
     let boxStartTop = 0;
+    let initialPadding = 5;
+    let initialWidth = 92;
     let lastReportedMarginV = null;
 
     const stage = document.getElementById('stage');
     const previewImg = document.getElementById('preview-img');
     const subBox = document.getElementById('sub-box');
     const lblRes = document.getElementById('lbl-res');
-    const lblPreviewSz = document.getElementById('lbl-preview-sz');
+    const lblFontsize = document.getElementById('lbl-fontsize');
+    const lblPadding = document.getElementById('lbl-padding');
+    const lblWidth = document.getElementById('lbl-width');
     const lblMargin = document.getElementById('lbl-margin');
     const subText = document.getElementById('sub-text');
 
@@ -236,20 +338,23 @@
       sendToStreamlit('streamlit:setFrameHeight', { height: Math.max(height, 460) });
     }
 
-    function emitValue(marginV) {
-      if (marginV === lastReportedMarginV) return;
-      lastReportedMarginV = marginV;
+    function emitAll() {
+      const percent = ((currentMarginV / videoH) * 100).toFixed(1);
+      lblMargin.innerText = `🎯 MarginV: ${currentMarginV} px (${percent}%)`;
+      lblFontsize.innerText = `${fontSize}px`;
+      lblPadding.innerText = `${boxPadding}px`;
+      lblWidth.innerText = `${boxWidth}%`;
 
-      const percent = ((marginV / videoH) * 100).toFixed(1);
-      lblMargin.innerText = `🎯 MarginV: ${marginV} px (${percent}%)`;
-
-      const subPos = marginV > (videoH * 0.7) ? 'top' : (marginV > (videoH * 0.4) ? 'middle' : 'bottom');
+      const subPos = currentMarginV > (videoH * 0.7) ? 'top' : (currentMarginV > (videoH * 0.4) ? 'middle' : 'bottom');
 
       sendToStreamlit('streamlit:setComponentValue', {
         value: {
-          margin_v: marginV,
+          margin_v: currentMarginV,
           percent_from_bottom: parseFloat(percent),
           sub_position: subPos,
+          font_size: fontSize,
+          box_padding: boxPadding,
+          box_width: boxWidth,
           video_w: videoW,
           video_h: videoH,
           preview_w: previewImg.clientWidth,
@@ -258,12 +363,34 @@
       });
     }
 
+    function applyBoxStyling() {
+      const stageH = previewImg.clientHeight || 360;
+      const scale = stageH / videoH;
+
+      // Font size scaled proportional to preview height
+      const cssFont = Math.max(9, Math.round(fontSize * scale * 1.3));
+      subText.style.fontSize = cssFont + 'px';
+
+      // Padding scaled proportional to boxPadding
+      const cssPaddingV = Math.max(3, Math.round(boxPadding * scale * 1.5));
+      const cssPaddingH = Math.max(6, Math.round(boxPadding * scale * 2.0));
+      subBox.style.padding = `${cssPaddingV}px ${cssPaddingH}px`;
+
+      // Box width
+      subBox.style.width = `${boxWidth}%`;
+      subBox.style.left = `${(100 - boxWidth) / 2}%`;
+
+      lblFontsize.innerText = `${fontSize}px`;
+      lblPadding.innerText = `${boxPadding}px`;
+      lblWidth.innerText = `${boxWidth}%`;
+    }
+
     function updateBoxPositionFromMarginV(marginV) {
-      const stageH = previewImg.clientHeight || 400;
+      const stageH = previewImg.clientHeight || 360;
       if (stageH <= 0) return;
 
       const scale = stageH / videoH;
-      const boxH = subBox.offsetHeight || 34;
+      const boxH = subBox.offsetHeight || 32;
 
       const marginVPreview = marginV * scale;
       let top = stageH - marginVPreview - boxH;
@@ -273,12 +400,11 @@
 
       const percent = ((marginV / videoH) * 100).toFixed(1);
       lblMargin.innerText = `🎯 MarginV: ${marginV} px (${percent}%)`;
-      lblPreviewSz.innerText = `Preview: ${previewImg.clientWidth} × ${stageH} px`;
     }
 
     function calculateMarginVFromBox() {
-      const stageH = previewImg.clientHeight || 400;
-      const boxH = subBox.offsetHeight || 34;
+      const stageH = previewImg.clientHeight || 360;
+      const boxH = subBox.offsetHeight || 32;
       const boxTop = subBox.offsetTop;
 
       const boxBottom = boxTop + boxH;
@@ -290,31 +416,68 @@
       return marginV;
     }
 
+    function adjustFontSize(delta) {
+      fontSize = Math.max(8, Math.min(50, fontSize + delta));
+      applyBoxStyling();
+      currentMarginV = calculateMarginVFromBox();
+      emitAll();
+    }
+
+    function adjustPadding(delta) {
+      boxPadding = Math.max(1, Math.min(30, boxPadding + delta));
+      applyBoxStyling();
+      currentMarginV = calculateMarginVFromBox();
+      emitAll();
+    }
+
+    function adjustWidth(delta) {
+      boxWidth = Math.max(40, Math.min(98, boxWidth + delta));
+      applyBoxStyling();
+      emitAll();
+    }
+
     function snapPercent(pct) {
       const marginV = Math.round(videoH * pct);
       currentMarginV = marginV;
       updateBoxPositionFromMarginV(marginV);
-      emitValue(marginV);
+      emitAll();
     }
 
     function onStageClick(e) {
-      if (e.target === subBox || subBox.contains(e.target)) return;
+      if (e.target === subBox || subBox.contains(e.target) || isDragging || isResizing) return;
 
       const stageRect = stage.getBoundingClientRect();
       const clickY = e.clientY - stageRect.top;
-      const boxH = subBox.offsetHeight || 34;
-      const stageH = previewImg.clientHeight || 400;
+      const boxH = subBox.offsetHeight || 32;
+      const stageH = previewImg.clientHeight || 360;
 
       let newTop = clickY - (boxH / 2);
       newTop = Math.max(0, Math.min(stageH - boxH, newTop));
       subBox.style.top = newTop + 'px';
 
-      const marginV = calculateMarginVFromBox();
-      emitValue(marginV);
+      currentMarginV = calculateMarginVFromBox();
+      emitAll();
     }
 
-    // Drag handlers
+    // Set up resize handles
+    ['n', 's', 'w', 'e'].forEach((dir) => {
+      const el = document.getElementById('rh-' + dir);
+      if (!el) return;
+      el.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        resizeMode = dir;
+        dragStartY = e.clientY;
+        dragStartX = e.clientX;
+        initialPadding = boxPadding;
+        initialWidth = boxWidth;
+        e.preventDefault();
+        e.stopPropagation();
+      });
+    });
+
+    // Sub box dragging
     subBox.addEventListener('mousedown', (e) => {
+      if (e.target.classList.contains('resize-handle')) return;
       isDragging = true;
       subBox.classList.add('dragging');
       dragStartY = e.clientY;
@@ -324,29 +487,54 @@
     });
 
     window.addEventListener('mousemove', (e) => {
+      if (isResizing) {
+        const deltaY = e.clientY - dragStartY;
+        const deltaX = e.clientX - dragStartX;
+
+        if (resizeMode === 'n' || resizeMode === 's') {
+          // Adjust vertical padding
+          const step = Math.round((resizeMode === 's' ? deltaY : -deltaY) / 4);
+          boxPadding = Math.max(1, Math.min(30, initialPadding + step));
+          applyBoxStyling();
+          currentMarginV = calculateMarginVFromBox();
+        } else if (resizeMode === 'w' || resizeMode === 'e') {
+          // Adjust horizontal width
+          const step = Math.round((resizeMode === 'e' ? deltaX : -deltaX) / 3);
+          boxWidth = Math.max(40, Math.min(98, initialWidth + step));
+          applyBoxStyling();
+        }
+        return;
+      }
+
       if (!isDragging) return;
-      const stageH = previewImg.clientHeight || 400;
-      const boxH = subBox.offsetHeight || 34;
+      const stageH = previewImg.clientHeight || 360;
+      const boxH = subBox.offsetHeight || 32;
       const deltaY = e.clientY - dragStartY;
 
       let newTop = boxStartTop + deltaY;
       newTop = Math.max(0, Math.min(stageH - boxH, newTop));
       subBox.style.top = newTop + 'px';
 
-      const marginV = calculateMarginVFromBox();
-      const percent = ((marginV / videoH) * 100).toFixed(1);
-      lblMargin.innerText = `🎯 MarginV: ${marginV} px (${percent}%)`;
+      currentMarginV = calculateMarginVFromBox();
+      const percent = ((currentMarginV / videoH) * 100).toFixed(1);
+      lblMargin.innerText = `🎯 MarginV: ${currentMarginV} px (${percent}%)`;
     });
 
     window.addEventListener('mouseup', () => {
+      if (isResizing) {
+        isResizing = false;
+        resizeMode = null;
+        emitAll();
+        return;
+      }
       if (!isDragging) return;
       isDragging = false;
       subBox.classList.remove('dragging');
-      const marginV = calculateMarginVFromBox();
-      emitValue(marginV);
+      currentMarginV = calculateMarginVFromBox();
+      emitAll();
     });
 
-    // Touch support
+    // Touch support for dragging
     subBox.addEventListener('touchstart', (e) => {
       if (e.touches.length === 1) {
         isDragging = true;
@@ -358,16 +546,16 @@
 
     window.addEventListener('touchmove', (e) => {
       if (!isDragging || e.touches.length !== 1) return;
-      const stageH = previewImg.clientHeight || 400;
-      const boxH = subBox.offsetHeight || 34;
+      const stageH = previewImg.clientHeight || 360;
+      const boxH = subBox.offsetHeight || 32;
       const deltaY = e.touches[0].clientY - dragStartY;
 
       let newTop = boxStartTop + deltaY;
       newTop = Math.max(0, Math.min(stageH - boxH, newTop));
       subBox.style.top = newTop + 'px';
 
-      const marginV = calculateMarginVFromBox();
-      const percent = ((marginV / videoH) * 100).toFixed(1);
+      currentMarginV = calculateMarginVFromBox();
+      const percent = ((currentMarginV / videoH) * 100).toFixed(1);
       lblMargin.innerText = `🎯 MarginV: ${marginV} px (${percent}%)`;
     }, { passive: true });
 
@@ -375,8 +563,8 @@
       if (!isDragging) return;
       isDragging = false;
       subBox.classList.remove('dragging');
-      const marginV = calculateMarginVFromBox();
-      emitValue(marginV);
+      currentMarginV = calculateMarginVFromBox();
+      emitAll();
     });
 
     // Streamlit render event listener
@@ -401,13 +589,27 @@
           currentMarginV = parseInt(args.default_margin_v);
         }
 
+        if (args.font_size !== undefined && args.font_size !== null) {
+          fontSize = parseInt(args.font_size);
+        }
+
+        if (args.box_padding !== undefined && args.box_padding !== null) {
+          boxPadding = parseInt(args.box_padding);
+        }
+
+        if (args.box_width !== undefined && args.box_width !== null) {
+          boxWidth = parseInt(args.box_width);
+        }
+
         if (args.image_b64 && previewImg.src !== args.image_b64) {
           previewImg.src = args.image_b64;
           previewImg.onload = () => {
+            applyBoxStyling();
             updateBoxPositionFromMarginV(currentMarginV);
             notifyHeight();
           };
         } else {
+          applyBoxStyling();
           updateBoxPositionFromMarginV(currentMarginV);
           notifyHeight();
         }

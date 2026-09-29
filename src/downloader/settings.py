@@ -31,7 +31,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "max_overlap_tempo": 1.85,
     # 5. Phụ đề & Đè phụ đề gốc
     "burn_sub": True,
-    "font_size": 11,
+    "font_size": 16,
+    "box_padding": 5,
     "sub_style": "solid_black",
     "sub_position": "bottom",
     "sub_margin_v": 30,
