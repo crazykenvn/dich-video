@@ -41,11 +41,39 @@ html, body, [class*="css"] { font-family: "Be Vietnam Pro", sans-serif; }
     display: none !important;
 }
 
-/* Tối ưu khoảng cách đỉnh trang khi không có banner */
+/* Ẩn hoàn toàn header mặc định để tránh đè vào các Tabs */
+header[data-testid="stHeader"], [data-testid="stHeader"] {
+    display: none !important;
+}
+
+/* Khoảng cách đỉnh trang cân đối, rộng rãi */
 .block-container {
-    padding-top: 1.5rem !important;
+    padding-top: 2rem !important;
     padding-bottom: 2rem !important;
+    padding-left: 2.5rem !important;
+    padding-right: 2.5rem !important;
     max-width: 100% !important;
+}
+
+/* Kiểu dáng Tabs chuyên nghiệp, nổi bật, dễ nhìn */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 10px;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.12);
+    padding-bottom: 6px;
+    margin-bottom: 1.2rem;
+}
+.stTabs [data-baseweb="tab"] {
+    height: 48px;
+    font-size: 1.05rem;
+    font-weight: 600;
+    border-radius: 8px 8px 0 0;
+    padding: 0 20px;
+    background-color: rgba(255, 255, 255, 0.03);
+}
+.stTabs [aria-selected="true"] {
+    background-color: rgba(56, 189, 248, 0.15) !important;
+    color: #38bdf8 !important;
+    border-bottom: 3px solid #38bdf8 !important;
 }
 
 .stProgress > div > div > div { background: linear-gradient(90deg, #38bdf8, #22c55e); }

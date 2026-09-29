@@ -230,6 +230,40 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
 
     # 2.2. THANH CÔNG CỤ THAO TÁC HÀNG LOẠT (BULK ACTION BAR)
     st.markdown("---")
+
+    with st.expander("🎯 Tùy chỉnh vị trí đè Sub cho nhóm video (áp dụng khi Dịch hàng loạt)", expanded=False):
+        c_bp, c_bs, c_bm = st.columns(3)
+        with c_bp:
+            bulk_sub_pos = st.selectbox(
+                "Vị trí đặt sub:",
+                ["bottom", "middle", "top"],
+                format_func=lambda x: {"bottom": "Dưới đáy (Bottom)", "middle": "Giữa video (Middle)", "top": "Trên đỉnh (Top)"}[x],
+                key="bulk_sub_pos",
+            )
+        with c_bs:
+            bulk_sub_style = st.selectbox(
+                "Kiểu che phụ đề:",
+                ["solid_black", "solid_white", "black_box", "white_box", "classic"],
+                format_func=lambda x: {
+                    "solid_black": "⬛ Hộp đen đặc che kín 100% (Khuyên dùng)",
+                    "solid_white": "⬜ Hộp trắng đặc che kín 100%",
+                    "black_box": "◾ Hộp đen mờ 60%",
+                    "white_box": "◽ Hộp trắng mờ 60%",
+                    "classic": "🔤 Chữ viền (Không hộp)",
+                }[x],
+                key="bulk_sub_style",
+            )
+        with c_bm:
+            bulk_margin_v = st.slider(
+                "Độ cao cách đáy (MarginV px):",
+                min_value=5,
+                max_value=300,
+                value=35,
+                step=5,
+                key="bulk_margin_v",
+                help="Tăng giá trị này để đẩy phụ đề dịch lên cao đè vừa khít dòng chữ tiếng Trung gốc.",
+            )
+
     c_sel1, c_sel2, c_act1, c_act2, c_act3 = st.columns([1.5, 1.5, 2.5, 2.5, 1.5])
 
     with c_sel1:
@@ -279,6 +313,11 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
     if btn_bulk_remix or btn_bulk_dub:
         target_mode = "remix" if btn_bulk_remix else "dub"
         target_vids = selected_vids
+        bulk_settings = {
+            "sub_position": bulk_sub_pos,
+            "sub_style": bulk_sub_style,
+            "sub_margin_v": bulk_margin_v,
+        } if btn_bulk_dub else None
 
         progress_bar = st.progress(0.0)
         status_text = st.empty()
@@ -288,7 +327,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
             status_text.info(f"Đang xử lý ({idx+1}/{len(target_vids)}): {v['title'][:35]}…")
             try:
                 reset_video_status(v["id"])
-                manager.process_inbox_video(v, mode=target_mode)
+                manager.process_inbox_video(v, mode=target_mode, settings=bulk_settings)
                 success_count += 1
             except Exception as e:
                 st.error(f"Lỗi video {v['platform_video_id']}: {e}")
@@ -357,15 +396,52 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                                 st.error(f"Lỗi: {e}")
 
                 with col_btn_d:
-                    if st.button("🎙️ Dịch", key=f"tbl_d_{vid_id}", help="Dịch & Lồng tiếng AI"):
-                        with st.spinner("Đang dịch…"):
-                            try:
-                                reset_video_status(vid_id)
-                                manager.process_inbox_video(v, mode="dub")
-                                st.session_state[f"sel_vid_{vid_id}"] = False
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Lỗi: {e}")
+                    with st.popover("🎙️ Dịch", help="Dịch & Lồng tiếng AI (Tùy chỉnh vị trí đè Sub)"):
+                        st.markdown(f"**🎯 Cấu hình đè Sub video #{vid_id}**")
+                        c_p1, c_p2 = st.columns(2)
+                        with c_p1:
+                            v_sub_pos = st.selectbox(
+                                "Vị trí đặt sub:",
+                                ["bottom", "middle", "top"],
+                                format_func=lambda x: {"bottom": "Dưới đáy (Bottom)", "middle": "Giữa video", "top": "Trên đỉnh"}[x],
+                                key=f"tbl_vpos_{vid_id}",
+                            )
+                        with c_p2:
+                            v_sub_style = st.selectbox(
+                                "Kiểu che sub:",
+                                ["solid_black", "solid_white", "black_box", "white_box", "classic"],
+                                format_func=lambda x: {
+                                    "solid_black": "⬛ Hộp đen đặc (Đè sub)",
+                                    "solid_white": "⬜ Hộp trắng đặc",
+                                    "black_box": "◾ Hộp đen mờ 60%",
+                                    "white_box": "◽ Hộp trắng mờ 60%",
+                                    "classic": "🔤 Chữ viền",
+                                }[x],
+                                key=f"tbl_vstyle_{vid_id}",
+                            )
+                        v_margin_v = st.slider(
+                            "Độ cao cách đáy (MarginV px):",
+                            min_value=5,
+                            max_value=300,
+                            value=35,
+                            step=5,
+                            key=f"tbl_vmarg_{vid_id}",
+                            help="Đẩy phụ đề dịch lên cao để che hoàn toàn phụ đề gốc.",
+                        )
+                        if st.button("🚀 Bắt đầu Dịch & Đè Sub", key=f"tbl_rundub_{vid_id}", type="primary", use_container_width=True):
+                            with st.spinner("Đang dịch & lồng tiếng…"):
+                                try:
+                                    custom_cfg = {
+                                        "sub_position": v_sub_pos,
+                                        "sub_style": v_sub_style,
+                                        "sub_margin_v": v_margin_v,
+                                    }
+                                    reset_video_status(vid_id)
+                                    manager.process_inbox_video(v, mode="dub", settings=custom_cfg)
+                                    st.session_state[f"sel_vid_{vid_id}"] = False
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Lỗi: {e}")
 
                 with col_btn_x:
                     if st.button("🗑️", key=f"tbl_x_{vid_id}", help="Bỏ qua video này"):
@@ -415,14 +491,48 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                             except Exception as e:
                                 st.error(f"Lỗi: {e}")
                     with col_b2:
-                        if st.button("🎙️ Dịch", key=f"grid_d_{vid_id}", type="primary", use_container_width=True):
-                            try:
-                                reset_video_status(vid_id)
-                                manager.process_inbox_video(v, mode="dub")
-                                st.session_state[f"sel_vid_{vid_id}"] = False
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Lỗi: {e}")
+                        with st.popover("🎙️ Dịch", help="Dịch & Lồng tiếng AI (Tùy chỉnh vị trí đè Sub)", use_container_width=True):
+                            st.markdown(f"**🎯 Cấu hình đè Sub video #{vid_id}**")
+                            gv_sub_pos = st.selectbox(
+                                "Vị trí đặt sub:",
+                                ["bottom", "middle", "top"],
+                                format_func=lambda x: {"bottom": "Dưới đáy (Bottom)", "middle": "Giữa video", "top": "Trên đỉnh"}[x],
+                                key=f"grid_vpos_{vid_id}",
+                            )
+                            gv_sub_style = st.selectbox(
+                                "Kiểu che sub:",
+                                ["solid_black", "solid_white", "black_box", "white_box", "classic"],
+                                format_func=lambda x: {
+                                    "solid_black": "⬛ Hộp đen đặc (Đè sub)",
+                                    "solid_white": "⬜ Hộp trắng đặc",
+                                    "black_box": "◾ Hộp đen mờ 60%",
+                                    "white_box": "◽ Hộp trắng mờ 60%",
+                                    "classic": "🔤 Chữ viền",
+                                }[x],
+                                key=f"grid_vstyle_{vid_id}",
+                            )
+                            gv_margin_v = st.slider(
+                                "Độ cao cách đáy (MarginV px):",
+                                min_value=5,
+                                max_value=300,
+                                value=35,
+                                step=5,
+                                key=f"grid_vmarg_{vid_id}",
+                                help="Đẩy phụ đề dịch lên cao để che hoàn toàn phụ đề gốc.",
+                            )
+                            if st.button("🚀 Bắt đầu Dịch", key=f"grid_rundub_{vid_id}", type="primary", use_container_width=True):
+                                try:
+                                    custom_cfg = {
+                                        "sub_position": gv_sub_pos,
+                                        "sub_style": gv_sub_style,
+                                        "sub_margin_v": gv_margin_v,
+                                    }
+                                    reset_video_status(vid_id)
+                                    manager.process_inbox_video(v, mode="dub", settings=custom_cfg)
+                                    st.session_state[f"sel_vid_{vid_id}"] = False
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Lỗi: {e}")
                     with col_b3:
                         if st.button("🗑️", key=f"grid_x_{vid_id}", use_container_width=True):
                             mark_as_skipped(vid_id)
@@ -632,8 +742,49 @@ def render_tab_settings() -> None:
 
         st.markdown("---")
 
-        # 4.3. Chất lượng xuất & Phần cứng
-        st.markdown("#### ⚙️ 3. Chất Lượng Xuất Video & Phần Cứng")
+        # 4.3. Phụ đề & Che phụ đề gốc (Hardsub Overlay)
+        st.markdown("#### 🎯 3. Vị Trí Đè Sub Gốc & Kiểu Phụ Đề Mặc Định")
+        c_sub1, c_sub2, c_sub3 = st.columns(3)
+        with c_sub1:
+            sub_pos_opts = ["bottom", "middle", "top"]
+            cur_sp = cfg.get("sub_position", "bottom")
+            sp_idx = sub_pos_opts.index(cur_sp) if cur_sp in sub_pos_opts else 0
+            cfg["sub_position"] = st.selectbox(
+                "Vị trí đặt phụ đề:",
+                options=sub_pos_opts,
+                format_func=lambda x: {"bottom": "Dưới đáy (Bottom)", "middle": "Giữa video (Middle)", "top": "Trên đỉnh (Top)"}[x],
+                index=sp_idx,
+            )
+        with c_sub2:
+            style_opts = ["solid_black", "solid_white", "black_box", "white_box", "classic"]
+            cur_sty = cfg.get("sub_style", "solid_black")
+            sty_idx = style_opts.index(cur_sty) if cur_sty in style_opts else 0
+            cfg["sub_style"] = st.selectbox(
+                "Kiểu che phụ đề:",
+                options=style_opts,
+                format_func=lambda x: {
+                    "solid_black": "⬛ Hộp đen đặc che kín 100% (Khuyên dùng)",
+                    "solid_white": "⬜ Hộp trắng đặc che kín 100%",
+                    "black_box": "◾ Hộp đen mờ 60%",
+                    "white_box": "◽ Hộp trắng mờ 60%",
+                    "classic": "🔤 Chữ viền (Không hộp)",
+                }[x],
+                index=sty_idx,
+            )
+        with c_sub3:
+            cfg["sub_margin_v"] = st.slider(
+                "Độ cao cách đáy (MarginV px):",
+                min_value=5,
+                max_value=300,
+                value=int(cfg.get("sub_margin_v", 30)),
+                step=5,
+                help="Độ cao đẩy phụ đề lên để che kín phụ đề tiếng Trung gốc.",
+            )
+
+        st.markdown("---")
+
+        # 4.4. Chất lượng xuất & Phần cứng
+        st.markdown("#### ⚙️ 4. Chất Lượng Xuất Video & Phần Cứng")
         c_q1, c_q2 = st.columns(2)
         with c_q1:
             quality_opts = {

@@ -29,10 +29,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "fit_timing": True,
     "resolve_overlap": True,
     "max_overlap_tempo": 1.85,
-    # 5. Phụ đề & Chất lượng video
+    # 5. Phụ đề & Đè phụ đề gốc
     "burn_sub": True,
     "font_size": 11,
-    "sub_style": "white_box",
+    "sub_style": "solid_black",
+    "sub_position": "bottom",
+    "sub_margin_v": 30,
     "video_quality": "high",
     # 6. Phần cứng
     "model_size": "medium",
