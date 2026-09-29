@@ -46,20 +46,197 @@ READY_DIR = OUTPUT_DIR / "ready_to_upload"
 READY_DIR.mkdir(parents=True, exist_ok=True)
 
 
+SUPPORTED_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".ts", ".wmv", ".m4v"}
+
+
+def pick_local_folder_dialog() -> str:
+    """Mở hộp thoại Windows Explorer để chọn thư mục video."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        folder = filedialog.askdirectory(title="Chọn thư mục chứa video trên máy tính")
+        root.destroy()
+        return str(folder) if folder else ""
+    except Exception:
+        return ""
+
+
+def pick_local_files_dialog() -> list[str]:
+    """Mở hộp thoại Windows Explorer để chọn các file video."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        files = filedialog.askopenfilenames(
+            title="Chọn các file video từ máy tính",
+            filetypes=[
+                ("Video files", "*.mp4 *.mkv *.mov *.webm *.avi *.flv *.ts *.wmv *.m4v"),
+                ("All files", "*.*"),
+            ],
+        )
+        root.destroy()
+        return list(files) if files else []
+    except Exception:
+        return []
+
+
+def scan_and_import_local_folder(folder_path_str: str) -> tuple[int, int]:
+    """Quét thư mục và nạp tất cả video vào Inbox.
+    Trả về (số video nạp thành công, tổng số video tìm thấy)."""
+    if not folder_path_str or not folder_path_str.strip():
+        return 0, 0
+    p = Path(folder_path_str.strip()).expanduser().resolve()
+    if not p.exists() or not p.is_dir():
+        return 0, 0
+
+    video_files = [f for f in p.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_VIDEO_EXTS]
+    imported = 0
+    for vf in video_files:
+        try:
+            sz = vf.stat().st_size
+            vid_id = f"local_{vf.stem}_{sz}"
+            record_download(
+                account_id="local_folder",
+                platform="local",
+                platform_video_id=vid_id,
+                title=vf.stem,
+                raw_video_path=str(vf.resolve()),
+                processed_status="inbox",
+            )
+            imported += 1
+        except Exception:
+            pass
+    return imported, len(video_files)
+
+
+def import_local_file_paths(file_paths: list[str]) -> int:
+    """Nạp trực tiếp danh sách file video từ máy tính vào Inbox."""
+    imported = 0
+    for fp in file_paths:
+        vf = Path(fp).expanduser().resolve()
+        if vf.exists() and vf.is_file() and vf.suffix.lower() in SUPPORTED_VIDEO_EXTS:
+            try:
+                sz = vf.stat().st_size
+                vid_id = f"local_{vf.stem}_{sz}"
+                record_download(
+                    account_id="local_files",
+                    platform="local",
+                    platform_video_id=vid_id,
+                    title=vf.stem,
+                    raw_video_path=str(vf.resolve()),
+                    processed_status="inbox",
+                )
+                imported += 1
+            except Exception:
+                pass
+    return imported
+
+
 # =============================================================================
 # TAB 1: THU THẬP NGUỒN VÀO (INGESTION)
 # =============================================================================
 def render_tab_ingestion(manager: DownloadManager) -> None:
     init_db()
     st.subheader("📥 1. Thu Thập Nguồn Vào (Chỉ Tải & Gom Nguồn)")
-    st.caption("Tự động cào video gốc sạch từ các kênh mạng xã hội hoặc nạp file video từ máy tính vào Hộp Thư Chờ Duyệt (Inbox).")
+    st.caption("Nạp video có sẵn từ máy tính hoặc tự động cào video gốc từ mạng xã hội vào Hộp Thư Chờ Duyệt (Inbox).")
 
     accounts = get_accounts()
 
-    col_add, col_local = st.columns([1.2, 1])
+    tab_local, tab_social = st.tabs([
+        "💻 Video Từ Máy Tính & Thư Mục (Local Videos)",
+        f"🌐 Kênh Mạng Xã Hội Đang Theo Dõi ({len(accounts)} kênh)",
+    ])
 
-    # 1.1. Thêm kênh theo dõi
-    with col_add:
+    # 1.1. Nguồn máy tính / Local Folder & Files
+    with tab_local:
+        col_fld, col_upl = st.columns([1.2, 1])
+
+        with col_fld:
+            st.markdown("#### 📁 Cách 1: Nạp Cả Thư Mục Video Trên Máy Tính")
+            st.caption("Quét tức thì toàn bộ video có sẵn trong thư mục máy tính mà không cần tốn thời gian upload.")
+
+            default_local_folder = str((Path.cwd() / "input_videos").resolve())
+            if "local_folder_input" not in st.session_state:
+                st.session_state["local_folder_input"] = default_local_folder
+
+            c_inp1, c_inp2 = st.columns([3, 1], vertical_alignment="bottom")
+            with c_inp1:
+                cur_folder = st.text_input(
+                    "Đường dẫn thư mục video:",
+                    value=st.session_state["local_folder_input"],
+                    key="txt_local_folder",
+                    help="Nhập hoặc dán đường dẫn thư mục bất kỳ trên máy bạn (VD: D:\\videos hoặc C:\\...\\input_videos)",
+                )
+            with c_inp2:
+                if st.button("📂 Chọn thư mục…", key="btn_pick_fld_explorer", use_container_width=True, help="Mở cửa sổ File Explorer của Windows để chọn thư mục"):
+                    chosen = pick_local_folder_dialog()
+                    if chosen:
+                        st.session_state["local_folder_input"] = chosen
+                        st.rerun()
+
+            p_check = Path(cur_folder).expanduser().resolve()
+            if p_check.exists() and p_check.is_dir():
+                found = [f for f in p_check.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_VIDEO_EXTS]
+                st.info(f"📊 Tìm thấy **{len(found)} video** hợp lệ trong thư mục này.")
+            else:
+                st.caption("⚠️ Thư mục chưa tồn tại hoặc đường dẫn không đúng.")
+
+            if st.button("⚡ QUÉT & NẠP TẤT CẢ VIDEO VÀO INBOX", type="primary", key="btn_scan_local_folder", use_container_width=True):
+                n_ok, n_tot = scan_and_import_local_folder(cur_folder)
+                if n_tot == 0:
+                    st.warning("Không tìm thấy file video nào trong thư mục được chọn!")
+                else:
+                    st.success(f"🎉 Đã nạp thành công {n_ok}/{n_tot} video vào Inbox Chờ Duyệt!")
+                    time.sleep(1)
+                    st.rerun()
+
+        with col_upl:
+            st.markdown("#### 🗂️ Cách 2: Chọn File Hoặc Kéo Thả Trực Tiếp")
+            st.caption("Chọn từng file video riêng lẻ từ bất kỳ vị trí nào trên máy tính.")
+
+            if st.button("🗂️ Mở File Explorer để chọn các file video…", key="btn_pick_files_explorer", use_container_width=True):
+                picked_files = pick_local_files_dialog()
+                if picked_files:
+                    count = import_local_file_paths(picked_files)
+                    st.success(f"🎉 Đã nạp {count} video được chọn vào Inbox Chờ Duyệt!")
+                    time.sleep(1)
+                    st.rerun()
+
+            st.write("**Hoặc kéo thả file vào khung dưới đây:**")
+            uploaded_files = st.file_uploader(
+                "Kéo thả video vào đây (Hỗ trợ file lớn lên tới 2GB):",
+                type=["mp4", "mkv", "mov", "webm", "avi", "flv", "ts", "wmv"],
+                accept_multiple_files=True,
+                key="manual_inbox_uploader",
+            )
+            if uploaded_files:
+                imported_count = 0
+                for uf in uploaded_files:
+                    dest_file = DOWNLOADS_DIR / "local" / uf.name
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    dest_file.write_bytes(uf.getbuffer())
+                    vid_id = f"local_{Path(uf.name).stem}_{int(time.time())}"
+                    record_download(
+                        account_id="local_upload",
+                        platform="local",
+                        platform_video_id=vid_id,
+                        title=Path(uf.name).stem,
+                        raw_video_path=str(dest_file),
+                        processed_status="inbox",
+                    )
+                    imported_count += 1
+                if imported_count > 0:
+                    st.success(f"✅ Đã nạp {imported_count} video vào Inbox Chờ Duyệt!")
+                    time.sleep(1)
+                    st.rerun()
+
+    # 1.2. Nguồn cào từ kênh mạng xã hội
+    with tab_social:
         with st.expander("➕ Thêm kênh / tài khoản cần theo dõi", expanded=len(accounts) == 0):
             with st.form("form_add_channel", clear_on_submit=True):
                 platform_choice = st.selectbox(
@@ -91,95 +268,64 @@ def render_tab_ingestion(manager: DownloadManager) -> None:
                             account_id=raw_id,
                             account_url=account_url.strip(),
                             account_name=name,
-                            auto_process=False,  # Chỉ download thuần túy vào Inbox!
+                            auto_process=False,
                             process_mode="none",
                         )
                         st.success(f"Đã thêm kênh [{platform_choice.upper()}] {name} thành công!")
                         st.rerun()
 
-    # 1.2. Nhập video có sẵn từ máy tính vào Inbox
-    with col_local:
-        with st.expander("📁 Nhập video có sẵn từ máy tính vào Inbox", expanded=True):
-            uploaded_files = st.file_uploader(
-                "Kéo thả video vào đây để nạp vào Inbox",
-                type=["mp4", "mkv", "mov", "webm"],
-                accept_multiple_files=True,
-                key="manual_inbox_uploader",
+        # Danh sách kênh & Nút Quét Tải
+        c_h1, c_h2 = st.columns([2, 1])
+        with c_h1:
+            st.markdown(f"#### 📋 Danh Sách Kênh Đang Theo Dõi ({len(accounts)} kênh)")
+        with c_h2:
+            max_vids = st.slider("Số video mới tối đa mỗi kênh:", min_value=1, max_value=20, value=5)
+
+        if not accounts:
+            st.info("💡 Chưa có kênh nào được theo dõi. Hãy thêm kênh ở trên để bắt đầu cào video tự động.")
+        else:
+            for acc in accounts:
+                with st.container():
+                    c1, c2, c3, c4 = st.columns([1.5, 4, 1.5, 1])
+                    with c1:
+                        st.markdown(f"**[{acc['platform'].upper()}]**")
+                    with c2:
+                        st.markdown(f"**{acc['account_name']}**")
+                        st.caption(f"ID: `{acc['account_id'][:30]}` | Lần quét cuối: {acc['last_checked_at'] or 'Chưa quét'}")
+                    with c3:
+                        is_act = bool(acc["is_active"])
+                        toggle = st.toggle("Bật quét", value=is_act, key=f"ingest_tog_{acc['account_id']}")
+                        if toggle != is_act:
+                            update_account_status(acc["account_id"], toggle)
+                            st.rerun()
+                    with c4:
+                        if st.button("🗑️", key=f"ingest_del_{acc['account_id']}", help="Xóa kênh này"):
+                            delete_account(acc["account_id"])
+                            st.rerun()
+                st.divider()
+
+            # Nút Quét Toàn Bộ Kênh
+            btn_scan = st.button(
+                "🚀 QUÉT & TẢI VIDEO MỚI TẤT CẢ KÊNH ĐANG BẬT (CHỈ TẢI VÀO INBOX)",
+                type="primary",
+                use_container_width=True,
             )
-            if uploaded_files:
-                imported_count = 0
-                for uf in uploaded_files:
-                    dest_file = DOWNLOADS_DIR / "local" / uf.name
-                    dest_file.parent.mkdir(parents=True, exist_ok=True)
-                    if not dest_file.exists():
-                        dest_file.write_bytes(uf.getbuffer())
-                        record_download(
-                            account_id="local_upload",
-                            platform="local",
-                            platform_video_id=f"local_{int(time.time())}_{uf.name}",
-                            title=Path(uf.name).stem,
-                            raw_video_path=str(dest_file),
-                            processed_status="inbox",
-                        )
-                        imported_count += 1
-                if imported_count > 0:
-                    st.success(f"Đã nạp {imported_count} video vào Inbox Chờ Duyệt!")
-                    st.rerun()
+            if btn_scan:
+                scan_progress = st.progress(0.0)
+                status_box = st.empty()
 
-    st.markdown("---")
+                def update_progress(msg: str, pct: float) -> None:
+                    scan_progress.progress(pct)
+                    status_box.info(f"⏳ {msg}")
 
-    # 1.3. Danh sách kênh & Nút Quét Tải
-    c_h1, c_h2 = st.columns([2, 1])
-    with c_h1:
-        st.markdown(f"#### 📋 Danh Sách Kênh Đang Theo Dõi ({len(accounts)} kênh)")
-    with c_h2:
-        max_vids = st.slider("Số video mới tối đa mỗi kênh:", min_value=1, max_value=20, value=5)
-
-    if not accounts:
-        st.info("💡 Chưa có kênh nào được theo dõi. Hãy thêm kênh ở trên để bắt đầu cào video tự động.")
-    else:
-        for acc in accounts:
-            with st.container():
-                c1, c2, c3, c4 = st.columns([1.5, 4, 1.5, 1])
-                with c1:
-                    st.markdown(f"**[{acc['platform'].upper()}]**")
-                with c2:
-                    st.markdown(f"**{acc['account_name']}**")
-                    st.caption(f"ID: `{acc['account_id'][:30]}` | Lần quét cuối: {acc['last_checked_at'] or 'Chưa quét'}")
-                with c3:
-                    is_act = bool(acc["is_active"])
-                    toggle = st.toggle("Bật quét", value=is_act, key=f"ingest_tog_{acc['account_id']}")
-                    if toggle != is_act:
-                        update_account_status(acc["account_id"], toggle)
-                        st.rerun()
-                with c4:
-                    if st.button("🗑️", key=f"ingest_del_{acc['account_id']}", help="Xóa kênh này"):
-                        delete_account(acc["account_id"])
-                        st.rerun()
-            st.divider()
-
-        # Nút Quét Toàn Bộ Kênh
-        btn_scan = st.button(
-            "🚀 QUÉT & TẢI VIDEO MỚI TẤT CẢ KÊNH ĐANG BẬT (CHỈ TẢI VÀO INBOX)",
-            type="primary",
-            use_container_width=True,
-        )
-        if btn_scan:
-            scan_progress = st.progress(0.0)
-            status_box = st.empty()
-
-            def update_progress(msg: str, pct: float) -> None:
-                scan_progress.progress(pct)
-                status_box.info(f"⏳ {msg}")
-
-            downloaded = manager.scan_all_accounts(
-                max_videos_per_account=max_vids,
-                progress=update_progress,
-            )
-            scan_progress.progress(1.0)
-            status_box.success(f"🎉 Đã hoàn tất tải {len(downloaded)} video mới vào Hộp thư chờ duyệt!")
-            time.sleep(1)
-            st.rerun()
+                downloaded = manager.scan_all_accounts(
+                    max_videos_per_account=max_vids,
+                    progress=update_progress,
+                )
+                scan_progress.progress(1.0)
+                status_box.success(f"🎉 Đã hoàn tất tải {len(downloaded)} video mới vào Hộp thư chờ duyệt!")
+                time.sleep(1)
+                st.rerun()
 
 
 # =============================================================================
@@ -427,8 +573,68 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
         st.warning(f"⚠️ Phát hiện {len(failed_videos)} video bị lỗi xử lý trước đó. Bạn có thể bấm '🔄 Thử lại' trực tiếp tại từng video bên dưới.")
 
     if not inbox_videos:
-        st.info("🎉 Hộp thư Inbox hiện đang trống! Hãy sang Tab **📥 1. Thu Thập Nguồn Vào** để quét video mới hoặc tải file lên.")
+        st.info("🎉 Hộp thư Inbox hiện đang trống! Hãy quét video từ kênh mạng xã hội hoặc nạp nhanh video từ máy tính vào bên dưới:")
+        with st.container():
+            st.markdown("#### 💻 Nạp nhanh video từ máy tính vào Inbox:")
+            c_tb1, c_tb2 = st.columns([1.5, 1])
+            with c_tb1:
+                cur_fld = st.text_input("Đường dẫn thư mục video:", value=str((Path.cwd() / "input_videos").resolve()), key="quick_inbox_fld")
+                c_btn1, c_btn2 = st.columns(2)
+                with c_btn1:
+                    if st.button("📂 Chọn thư mục…", key="btn_quick_browse", use_container_width=True):
+                        ch = pick_local_folder_dialog()
+                        if ch:
+                            st.session_state["quick_inbox_fld"] = ch
+                            st.rerun()
+                with c_btn2:
+                    if st.button("⚡ Quét & Nạp thư mục", type="primary", key="btn_quick_scan", use_container_width=True):
+                        n_ok, n_tot = scan_and_import_local_folder(cur_fld)
+                        if n_tot > 0:
+                            st.success(f"Đã nạp {n_ok} video vào Inbox!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.warning("Thư mục trống hoặc không có file video!")
+            with c_tb2:
+                if st.button("🗂️ Mở Explorer chọn file video…", key="btn_quick_pick_files", use_container_width=True):
+                    picked = pick_local_files_dialog()
+                    if picked:
+                        c = import_local_file_paths(picked)
+                        st.success(f"Đã nạp {c} video vào Inbox!")
+                        time.sleep(1)
+                        st.rerun()
+                st.caption("💡 Bạn cũng có thể sang Tab **📥 1. Thu Thập Nguồn Vào** để kéo thả file hoặc quét từ mạng xã hội.")
         return
+
+    # Nạp nhanh thêm video từ máy tính khi đang ở Tab 2
+    with st.expander("➕ Nạp thêm video từ máy tính vào Inbox (Thư mục / File)", expanded=False):
+        c_tb1, c_tb2 = st.columns([1.5, 1])
+        with c_tb1:
+            cur_fld = st.text_input("Đường dẫn thư mục video:", value=str((Path.cwd() / "input_videos").resolve()), key="add_more_fld")
+            c_btn1, c_btn2 = st.columns(2)
+            with c_btn1:
+                if st.button("📂 Chọn thư mục…", key="btn_more_browse", use_container_width=True):
+                    ch = pick_local_folder_dialog()
+                    if ch:
+                        st.session_state["add_more_fld"] = ch
+                        st.rerun()
+            with c_btn2:
+                if st.button("⚡ Quét & Nạp thư mục này", key="btn_add_more_scan", use_container_width=True):
+                    n_ok, n_tot = scan_and_import_local_folder(cur_fld)
+                    if n_tot > 0:
+                        st.success(f"Đã nạp {n_ok} video vào Inbox!")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.warning("Thư mục trống hoặc không có file video!")
+        with c_tb2:
+            if st.button("🗂️ Mở Explorer chọn file video…", key="btn_add_more_pick", use_container_width=True):
+                picked = pick_local_files_dialog()
+                if picked:
+                    c = import_local_file_paths(picked)
+                    st.success(f"Đã nạp {c} video vào Inbox!")
+                    time.sleep(1)
+                    st.rerun()
 
     # 2.1. Thanh điều khiển hiển thị & bộ lọc
     col_f1, col_f2, col_f3 = st.columns([2, 1.5, 1.5])
@@ -436,7 +642,19 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
         search_query = st.text_input("🔍 Tìm kiếm theo tiêu đề:", placeholder="Nhập từ khóa...")
     with col_f2:
         platforms = ["Tất cả"] + sorted(list({v["platform"] for v in inbox_videos}))
-        filter_plat = st.selectbox("Lọc theo nền tảng:", platforms)
+        plat_labels = {
+            "local": "💻 Máy tính (Local Video)",
+            "douyin": "🎵 Douyin",
+            "tiktok": "📱 TikTok",
+            "bilibili": "📺 Bilibili",
+            "facebook": "📘 Facebook",
+            "instagram": "📸 Instagram",
+        }
+        filter_plat = st.selectbox(
+            "Lọc theo nền tảng:",
+            platforms,
+            format_func=lambda x: "Tất cả các nguồn" if x == "Tất cả" else plat_labels.get(x, x.upper()),
+        )
     with col_f3:
         view_mode = st.radio(
             "Chế độ hiển thị:",
