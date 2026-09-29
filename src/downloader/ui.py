@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 import pandas as pd
 import streamlit as st
+
+from .lab import LAB_OUTPUT_DIR, LAB_PRESETS, generate_single_variant
 
 from ..config import (
     EDGE_VOICE_ALTERNATES,
@@ -810,8 +813,8 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
             is_failed = v.get("processed_status") == "failed"
 
             with st.container():
-                col_chk, col_plat, col_title, col_size, col_preview, col_btn_r, col_btn_d, col_btn_x = st.columns(
-                    [0.5, 1.2, 4, 1.5, 1.2, 1.2, 1.2, 0.6]
+                col_chk, col_plat, col_title, col_size, col_preview, col_btn_r, col_btn_d, col_btn_lab, col_btn_x = st.columns(
+                    [0.5, 1.2, 3.6, 1.4, 1.1, 1.1, 1.3, 0.9, 0.6]
                 )
 
                 with col_chk:
@@ -858,6 +861,13 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                         st.session_state["show_sub_dialog_for"] = vid_id
                         st.rerun()
 
+                with col_btn_lab:
+                    if st.button("🧪 Lab", key=f"tbl_lab_{vid_id}", help="Đưa video này sang Phòng Thử Nghiệm A/B để sinh nhiều biến thể"):
+                        st.session_state["lab_target_video_path"] = str(raw_path)
+                        st.session_state["lab_target_video_title"] = v["title"] or f"Video_{v['platform_video_id']}"
+                        st.session_state["lab_src_mode"] = "Từ Hộp thư (Inbox)"
+                        st.toast("Đã chọn video! Vui lòng chuyển sang Tab 🧪 4. Phòng Thí Nghiệm.", icon="🧪")
+
                 with col_btn_x:
                     if st.button("🗑️", key=f"tbl_x_{vid_id}", help="Bỏ qua video này"):
                         mark_as_skipped(vid_id)
@@ -892,7 +902,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
 
                     st.markdown(f"**{v['title'][:45]}**" if v['title'] else f"Video_{v['platform_video_id']}")
 
-                    col_b1, col_b2, col_b3 = st.columns([1.5, 1.5, 1])
+                    col_b1, col_b2, col_b3, col_b4 = st.columns([1.3, 1.4, 0.9, 0.8])
                     with col_b1:
                         grid_r_lbl = "🔄 Thử lại" if is_failed else "⚡ Remix"
                         grid_r_type = "primary" if is_failed else "secondary"
@@ -904,10 +914,16 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                             except Exception as e:
                                 st.error(f"Lỗi: {e}")
                     with col_b2:
-                        if st.button("🎙️ Dịch & Căn Sub", key=f"grid_open_dlg_{vid_id}", type="primary", use_container_width=True, help="Mở giao diện kéo thả đè sub trực quan"):
+                        if st.button("🎙️ Dịch", key=f"grid_open_dlg_{vid_id}", type="primary", use_container_width=True, help="Mở giao diện kéo thả đè sub trực quan"):
                             st.session_state["show_sub_dialog_for"] = vid_id
                             st.rerun()
                     with col_b3:
+                        if st.button("🧪 Lab", key=f"grid_lab_{vid_id}", use_container_width=True, help="Đưa video sang Phòng Thử Nghiệm A/B"):
+                            st.session_state["lab_target_video_path"] = str(raw_path)
+                            st.session_state["lab_target_video_title"] = v["title"] or f"Video_{v['platform_video_id']}"
+                            st.session_state["lab_src_mode"] = "Từ Hộp thư (Inbox)"
+                            st.toast("Đã chọn video! Vui lòng chuyển sang Tab 🧪 4. Phòng Thí Nghiệm.", icon="🧪")
+                    with col_b4:
                         if st.button("🗑️", key=f"grid_x_{vid_id}", use_container_width=True):
                             mark_as_skipped(vid_id)
                             st.rerun()
@@ -1270,3 +1286,240 @@ def render_tab_settings() -> None:
         st.write(f"• **Gemini API:** Đang có **{rotator.total_keys} keys** hoạt động luân phiên (file `gemini_keys.txt`).")
         st.write("• **Cookies:** Các file cookie được tự động nhận diện trong thư mục `cookies/`:")
         st.code("cookies/\n  ├── douyin_cookies.txt\n  ├── bilibili_cookies.txt\n  ├── facebook_cookies.txt\n  └── instagram_cookies.txt")
+
+
+# =============================================================================
+# TAB 4: PHÒNG THÍ NGHIỆM LÁCH BẢN QUYỀN (A/B TESTING LAB)
+# =============================================================================
+def render_tab_lab(manager: DownloadManager) -> None:
+    init_db()
+    st.subheader("🧪 4. Phòng Thí Nghiệm Lách Bản Quyền (A/B Testing Lab)")
+    st.caption(
+        "Thử nghiệm đa biến thể: Chọn 1 video và tick chọn các kỹ thuật xử lý ảnh khác nhau "
+        "(Phủ nhiễu Film Grain, Lưới rỗ Scanlines, Ma trận Mesh, Lệch viền RGB,...). "
+        "Hệ thống sẽ sinh song song các biến thể để bạn so sánh chất lượng hình ảnh và thử nghiệm độ hiệu quả khi đăng tải."
+    )
+
+    # 1. NGUỒN VIDEO ĐẦU VÀO
+    st.markdown("### 1. Chọn Video Nguồn Thử Nghiệm")
+    inbox_videos = get_inbox_videos()
+
+    col_src_mode, col_src_val = st.columns([1.5, 3.5])
+    with col_src_mode:
+        src_mode = st.radio(
+            "Nguồn video:",
+            ["Từ Hộp thư (Inbox)", "Tải lên file (Upload MP4)", "Đường dẫn file trên máy"],
+            key="lab_src_mode",
+        )
+
+    target_video_path: Path | None = None
+    target_video_title: str = ""
+
+    if src_mode == "Từ Hộp thư (Inbox)":
+        if not inbox_videos:
+            st.info("Hiện không có video nào trong Hộp thư. Bạn có thể tải lên file MP4 hoặc thu thập từ Tab 1.")
+        else:
+            preselected_path = st.session_state.get("lab_target_video_path")
+            default_idx = 0
+            vid_options = []
+            for idx, v in enumerate(inbox_videos):
+                lbl = f"[{v['platform'].upper()}] {v['title'][:60] or v['platform_video_id']} (ID: {v['id']})"
+                vid_options.append((lbl, v))
+                if preselected_path and v.get("raw_video_path") == preselected_path:
+                    default_idx = idx
+
+            with col_src_val:
+                chosen_opt = st.selectbox(
+                    "Chọn video từ Inbox:",
+                    options=vid_options,
+                    format_func=lambda x: x[0],
+                    index=default_idx,
+                    key="lab_inbox_select",
+                )
+                if chosen_opt:
+                    chosen_vid = chosen_opt[1]
+                    p = Path(chosen_vid["raw_video_path"])
+                    if p.exists():
+                        target_video_path = p
+                        target_video_title = chosen_vid["title"] or f"Video_{chosen_vid['platform_video_id']}"
+
+    elif src_mode == "Tải lên file (Upload MP4)":
+        with col_src_val:
+            uploaded_file = st.file_uploader(
+                "Chọn video từ máy tính (MP4, MOV, MKV...):",
+                type=["mp4", "mov", "mkv", "webm"],
+                key="lab_file_uploader",
+            )
+            if uploaded_file is not None:
+                lab_upload_dir = LAB_OUTPUT_DIR / "uploads"
+                lab_upload_dir.mkdir(parents=True, exist_ok=True)
+                save_path = lab_upload_dir / uploaded_file.name
+                if not save_path.exists() or save_path.stat().st_size != uploaded_file.size:
+                    save_path.write_bytes(uploaded_file.getbuffer())
+                target_video_path = save_path
+                target_video_title = uploaded_file.name
+
+    else:
+        with col_src_val:
+            local_path_str = st.text_input(
+                "Đường dẫn file video trên máy (ví dụ: D:\\Videos\\test.mp4):",
+                value=st.session_state.get("lab_target_video_path", ""),
+                key="lab_local_path_input",
+            )
+            if local_path_str.strip():
+                p = Path(local_path_str.strip())
+                if p.exists() and p.is_file():
+                    target_video_path = p
+                    target_video_title = p.stem
+                else:
+                    st.error("Không tìm thấy file video tại đường dẫn đã nhập!")
+
+    if target_video_path and target_video_path.exists():
+        with st.expander(f"🎬 Video nguồn đã chọn: **{target_video_title}**", expanded=False):
+            c_prev1, c_prev2 = st.columns([1, 2])
+            with c_prev1:
+                st.video(str(target_video_path))
+            with c_prev2:
+                sz = round(target_video_path.stat().st_size / (1024 * 1024), 2)
+                st.write(f"• **Tên file:** `{target_video_path.name}`")
+                st.write(f"• **Dung lượng:** `{sz} MB`")
+                st.write(f"• **Đường dẫn:** `{target_video_path}`")
+
+    st.markdown("---")
+
+    # 2. CHỌN CÁC PHƯƠNG PHÁP XỬ LÝ
+    st.markdown("### 2. Chọn Các Phương Pháp Xử Lý Muốn Thử Nghiệm")
+    st.caption("Tick chọn các kỹ thuật bạn muốn so sánh. Hệ thống sẽ sinh riêng từng video cho mỗi phương pháp.")
+
+    c_btn1, c_btn2, c_btn3 = st.columns([1.5, 1.5, 3])
+    with c_btn1:
+        if st.button("⭐ Chọn các bản khuyên dùng", key="lab_btn_rec", use_container_width=True):
+            for pid, pdata in LAB_PRESETS.items():
+                st.session_state[f"lab_chk_{pid}"] = pdata["recommended"]
+            st.rerun()
+    with c_btn2:
+        if st.button("☑️ Chọn tất cả", key="lab_btn_all", use_container_width=True):
+            for pid in LAB_PRESETS:
+                st.session_state[f"lab_chk_{pid}"] = True
+            st.rerun()
+    with c_btn3:
+        if st.button("◻️ Bỏ chọn toàn bộ", key="lab_btn_none", use_container_width=True):
+            for pid in LAB_PRESETS:
+                st.session_state[f"lab_chk_{pid}"] = False
+            st.rerun()
+
+    selected_presets = []
+    cols_preset = st.columns(2)
+    for idx, (pid, pdata) in enumerate(LAB_PRESETS.items()):
+        with cols_preset[idx % 2]:
+            rec_badge = " :green[⭐ Khuyên dùng]" if pdata["recommended"] else ""
+            default_val = pdata["recommended"]
+            is_checked = st.checkbox(
+                f"{pdata['name']}{rec_badge}",
+                value=st.session_state.get(f"lab_chk_{pid}", default_val),
+                key=f"lab_chk_{pid}",
+            )
+            if is_checked:
+                selected_presets.append(pid)
+            st.caption(f":blue[[{pdata['tag']}]] • {pdata['description']}")
+            st.write("")
+
+    st.markdown("---")
+
+    # 3. THIẾT LẬP THỜI LƯỢNG & BẮT ĐẦU
+    st.markdown("### 3. Thiết Lập Thử Nghiệm & Tiến Hành")
+    c_opt1, c_opt2 = st.columns(2)
+    with c_opt1:
+        duration_mode = st.radio(
+            "⏱️ Thời lượng video thử nghiệm:",
+            [
+                "⚡ Cắt 15 giây đầu (Khuyên dùng — Render chỉ mất 2-4 giây/biến thể)",
+                "🎬 Toàn bộ video (Dành cho bản muốn lấy đăng test trực tiếp)",
+            ],
+            key="lab_duration_mode",
+        )
+        preview_sec = 15.0 if "15 giây" in duration_mode else None
+
+    with c_opt2:
+        anti_audio_lab = st.checkbox(
+            "🔊 Biến điệu âm thanh chống bản quyền tiếng (Pitch Shift + Parametric EQ)",
+            value=True,
+            help="Giữ nguyên nội dung âm thanh nhưng phá vỡ Acoustic Fingerprint.",
+            key="lab_anti_audio",
+        )
+
+    btn_start_lab = st.button(
+        f"🚀 BẮT ĐẦU SINH {len(selected_presets)} BIẾN THỂ THỬ NGHIỆM",
+        type="primary",
+        disabled=(not target_video_path or len(selected_presets) == 0),
+        use_container_width=True,
+    )
+
+    if btn_start_lab and target_video_path:
+        session_folder = LAB_OUTPUT_DIR / f"{target_video_path.stem}_{int(time.time())}"
+        session_folder.mkdir(parents=True, exist_ok=True)
+
+        prog_bar = st.progress(0.0)
+        status_box = st.empty()
+
+        results = []
+        for idx, pid in enumerate(selected_presets):
+            preset_info = LAB_PRESETS[pid]
+            status_box.info(f"⏳ Đang xử lý ({idx+1}/{len(selected_presets)}): **{preset_info['name']}**…")
+            out_file = session_folder / f"variant_{pid}.mp4"
+            res = generate_single_variant(
+                video_path=target_video_path,
+                output_path=out_file,
+                preset_id=pid,
+                preview_duration=preview_sec,
+                anti_audio=anti_audio_lab,
+            )
+            results.append(res)
+            prog_bar.progress((idx + 1) / len(selected_presets))
+
+        st.session_state["lab_results"] = results
+        st.session_state["lab_session_folder"] = str(session_folder)
+        st.session_state["lab_original_title"] = target_video_title
+        status_box.success(f"🎉 Hoàn tất sinh {len(results)} biến thể thử nghiệm!")
+        st.rerun()
+
+    # 4. BẢNG SO SÁNH CÁC BIẾN THỂ (GALLERY)
+    if "lab_results" in st.session_state and st.session_state["lab_results"]:
+        results = st.session_state["lab_results"]
+        st.markdown("---")
+        st.subheader(f"📊 Kết Quả So Sánh {len(results)} Biến Thể (Comparison Gallery)")
+        st.caption(f"📁 Thư mục lưu trữ: `{st.session_state.get('lab_session_folder')}`")
+
+        c_cards = st.columns(2)
+        for idx, res in enumerate(results):
+            with c_cards[idx % 2]:
+                with st.container(border=True):
+                    st.markdown(f"#### {res['preset_name']}")
+                    st.caption(f":blue[[{res['tag']}]] • ⏱️ Render: `{res.get('render_time_sec', 0)}s` | 💾 Kích thước: `{res.get('file_size_mb', 0)} MB`")
+
+                    if res.get("success") and Path(res["output_path"]).exists():
+                        st.video(str(res["output_path"]))
+                        with st.expander("🛠️ Lệnh Filter FFmpeg"):
+                            st.code(res.get("filter_code", ""), language="bash")
+
+                        btn_col1, btn_col2 = st.columns(2)
+                        with btn_col1:
+                            if st.button("⭐ Đưa vào Kho Upload (Tab 3)", key=f"lab_pick_{idx}", use_container_width=True):
+                                target_ready = READY_DIR / f"{Path(res['output_path']).stem}_{Path(res['output_path']).name}"
+                                shutil.copy2(res["output_path"], target_ready)
+                                record_download(
+                                    account_id="lab_test",
+                                    platform="lab",
+                                    platform_video_id=f"lab_{int(time.time())}_{idx}",
+                                    title=f"[{res['tag']}] {st.session_state.get('lab_original_title', 'Lab_Video')}",
+                                    raw_video_path=str(res["output_path"]),
+                                    processed_status="completed",
+                                )
+                                st.success("✅ Đã chuyển video sang Kho Sẵn Sàng Upload (Tab 3)!")
+                        with btn_col2:
+                            if st.button("📂 Mở file trên máy", key=f"lab_open_{idx}", use_container_width=True):
+                                if sys.platform == "win32":
+                                    subprocess.run(["explorer", f"/select,{str(res['output_path'])}"])
+                    else:
+                        st.error(f"❌ Xử lý thất bại: {res.get('error')}")
+

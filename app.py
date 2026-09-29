@@ -18,6 +18,7 @@ from src.downloader.db import init_db
 from src.downloader.manager import DownloadManager
 from src.downloader.ui import (
     render_tab_ingestion,
+    render_tab_lab,
     render_tab_publishing,
     render_tab_settings,
     render_tab_triage,
@@ -108,13 +109,14 @@ def main() -> None:
     manager = DownloadManager()
 
     # =========================================================================
-    # GIAO DIỆN CHÍNH: 4 TABS TUẦN TỰ (FULL WIDTH)
+    # GIAO DIỆN CHÍNH: 5 TABS TUẦN TỰ (FULL WIDTH)
     # =========================================================================
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📥 1. Thu Thập Nguồn Vào",
         "🔍 2. Kiểm Tra & Duyệt Xử Lý",
         "🚀 3. Kho Sẵn Sàng Upload",
-        "🏷️ 4. Cấu Hình & Thương Hiệu",
+        "🧪 4. Phòng Thí Nghiệm (A/B Lab)",
+        "🏷️ 5. Cấu Hình & Thương Hiệu",
     ])
 
     with tab1:
@@ -127,6 +129,9 @@ def main() -> None:
         render_tab_publishing()
 
     with tab4:
+        render_tab_lab(manager=manager)
+
+    with tab5:
         render_tab_settings()
 
 
