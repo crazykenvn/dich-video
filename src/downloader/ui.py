@@ -163,15 +163,17 @@ def render_tab_ingestion(manager: DownloadManager) -> None:
             st.markdown("#### 📁 Cách 1: Nạp Cả Thư Mục Video Trên Máy Tính")
             st.caption("Quét tức thì toàn bộ video có sẵn trong thư mục máy tính mà không cần tốn thời gian upload.")
 
+            if "_pending_local_folder" in st.session_state:
+                st.session_state["txt_local_folder"] = st.session_state.pop("_pending_local_folder")
+
             default_local_folder = str((Path.cwd() / "input_videos").resolve())
-            if "local_folder_input" not in st.session_state:
-                st.session_state["local_folder_input"] = default_local_folder
+            if "txt_local_folder" not in st.session_state:
+                st.session_state["txt_local_folder"] = default_local_folder
 
             c_inp1, c_inp2 = st.columns([3, 1], vertical_alignment="bottom")
             with c_inp1:
                 cur_folder = st.text_input(
                     "Đường dẫn thư mục video:",
-                    value=st.session_state["local_folder_input"],
                     key="txt_local_folder",
                     help="Nhập hoặc dán đường dẫn thư mục bất kỳ trên máy bạn (VD: D:\\videos hoặc C:\\...\\input_videos)",
                 )
@@ -179,7 +181,7 @@ def render_tab_ingestion(manager: DownloadManager) -> None:
                 if st.button("📂 Chọn thư mục…", key="btn_pick_fld_explorer", use_container_width=True, help="Mở cửa sổ File Explorer của Windows để chọn thư mục"):
                     chosen = pick_local_folder_dialog()
                     if chosen:
-                        st.session_state["local_folder_input"] = chosen
+                        st.session_state["_pending_local_folder"] = chosen
                         st.rerun()
 
             p_check = Path(cur_folder).expanduser().resolve()
@@ -582,13 +584,20 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
             st.markdown("#### 💻 Nạp nhanh video từ máy tính vào Inbox:")
             c_tb1, c_tb2 = st.columns([1.5, 1])
             with c_tb1:
-                cur_fld = st.text_input("Đường dẫn thư mục video:", value=str((Path.cwd() / "input_videos").resolve()), key="quick_inbox_fld")
+                if "_pending_quick_inbox_fld" in st.session_state:
+                    st.session_state["quick_inbox_fld"] = st.session_state.pop("_pending_quick_inbox_fld")
+
+                default_inbox_fld = str((Path.cwd() / "input_videos").resolve())
+                if "quick_inbox_fld" not in st.session_state:
+                    st.session_state["quick_inbox_fld"] = default_inbox_fld
+
+                cur_fld = st.text_input("Đường dẫn thư mục video:", key="quick_inbox_fld")
                 c_btn1, c_btn2 = st.columns(2)
                 with c_btn1:
                     if st.button("📂 Chọn thư mục…", key="btn_quick_browse", use_container_width=True):
                         ch = pick_local_folder_dialog()
                         if ch:
-                            st.session_state["quick_inbox_fld"] = ch
+                            st.session_state["_pending_quick_inbox_fld"] = ch
                             st.rerun()
                 with c_btn2:
                     if st.button("⚡ Quét & Nạp thư mục", type="primary", key="btn_quick_scan", use_container_width=True):
@@ -614,13 +623,20 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
     with st.expander("➕ Nạp thêm video từ máy tính vào Inbox (Thư mục / File)", expanded=False):
         c_tb1, c_tb2 = st.columns([1.5, 1])
         with c_tb1:
-            cur_fld = st.text_input("Đường dẫn thư mục video:", value=str((Path.cwd() / "input_videos").resolve()), key="add_more_fld")
+            if "_pending_add_more_fld" in st.session_state:
+                st.session_state["add_more_fld"] = st.session_state.pop("_pending_add_more_fld")
+
+            default_more_fld = str((Path.cwd() / "input_videos").resolve())
+            if "add_more_fld" not in st.session_state:
+                st.session_state["add_more_fld"] = default_more_fld
+
+            cur_fld = st.text_input("Đường dẫn thư mục video:", key="add_more_fld")
             c_btn1, c_btn2 = st.columns(2)
             with c_btn1:
                 if st.button("📂 Chọn thư mục…", key="btn_more_browse", use_container_width=True):
                     ch = pick_local_folder_dialog()
                     if ch:
-                        st.session_state["add_more_fld"] = ch
+                        st.session_state["_pending_add_more_fld"] = ch
                         st.rerun()
             with c_btn2:
                 if st.button("⚡ Quét & Nạp thư mục này", key="btn_add_more_scan", use_container_width=True):
