@@ -198,14 +198,6 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
         st.info("🎉 Hộp thư Inbox hiện đang trống! Hãy sang Tab **📥 1. Thu Thập Nguồn Vào** để quét video mới hoặc tải file lên.")
         return
 
-    # Khởi tạo session state lưu danh sách ID được chọn
-    if "selected_inbox_ids" not in st.session_state:
-        st.session_state["selected_inbox_ids"] = set()
-
-    # Đồng bộ các ID hợp lệ còn nằm trong inbox
-    valid_ids = {v["id"] for v in inbox_videos}
-    st.session_state["selected_inbox_ids"] = st.session_state["selected_inbox_ids"].intersection(valid_ids)
-
     # 2.1. Thanh điều khiển hiển thị & bộ lọc
     col_f1, col_f2, col_f3 = st.columns([2, 1.5, 1.5])
     with col_f1:
@@ -228,26 +220,36 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
         q = search_query.strip().lower()
         filtered_videos = [v for v in filtered_videos if q in (v["title"] or "").lower()]
 
-    filtered_ids = {v["id"] for v in filtered_videos}
-    selected_ids = st.session_state["selected_inbox_ids"]
-    selected_count = len(selected_ids.intersection(filtered_ids))
+    def _set_all_selection(vids: list[dict[str, Any]], state: bool) -> None:
+        for v in vids:
+            st.session_state[f"sel_vid_{v['id']}"] = state
+
+    # Danh sách video đang được chọn (dựa trên key checkbox của từng video)
+    selected_vids = [v for v in filtered_videos if st.session_state.get(f"sel_vid_{v['id']}", False)]
+    selected_count = len(selected_vids)
 
     # 2.2. THANH CÔNG CỤ THAO TÁC HÀNG LOẠT (BULK ACTION BAR)
     st.markdown("---")
     c_sel1, c_sel2, c_act1, c_act2, c_act3 = st.columns([1.5, 1.5, 2.5, 2.5, 1.5])
 
     with c_sel1:
-        if st.button("☑️ Chọn tất cả", use_container_width=True):
-            st.session_state["selected_inbox_ids"].update(filtered_ids)
-            st.rerun()
+        st.button(
+            "☑️ Chọn tất cả",
+            on_click=_set_all_selection,
+            args=(filtered_videos, True),
+            use_container_width=True,
+        )
     with c_sel2:
-        if st.button("◻️ Bỏ chọn", use_container_width=True):
-            st.session_state["selected_inbox_ids"].difference_update(filtered_ids)
-            st.rerun()
+        st.button(
+            "◻️ Bỏ chọn",
+            on_click=_set_all_selection,
+            args=(filtered_videos, False),
+            use_container_width=True,
+        )
     with c_act1:
         btn_bulk_remix = st.button(
             f"⚡ Remix ({selected_count} video đã chọn)",
-            type="primary",
+            type="primary" if selected_count > 0 else "secondary",
             disabled=selected_count == 0,
             use_container_width=True,
             help="Chạy bộ lọc lách bản quyền pHash Lanczos + Micro-EQ + Hạt Noise + Biến điệu audio + Logo (3-6s/clip).",
@@ -268,30 +270,34 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
 
     # Xử lý các thao tác hàng loạt
     if btn_bulk_del:
-        for vid_id in list(selected_ids):
-            mark_as_skipped(vid_id)
-        st.session_state["selected_inbox_ids"].clear()
-        st.success("Đã bỏ qua các video đã chọn.")
+        for v in selected_vids:
+            mark_as_skipped(v["id"])
+            st.session_state[f"sel_vid_{v['id']}"] = False
+        st.success(f"Đã bỏ qua {len(selected_vids)} video.")
         st.rerun()
 
     if btn_bulk_remix or btn_bulk_dub:
         target_mode = "remix" if btn_bulk_remix else "dub"
-        target_vids = [v for v in inbox_videos if v["id"] in selected_ids]
+        target_vids = selected_vids
 
         progress_bar = st.progress(0.0)
         status_text = st.empty()
 
+        success_count = 0
         for idx, v in enumerate(target_vids):
             status_text.info(f"Đang xử lý ({idx+1}/{len(target_vids)}): {v['title'][:35]}…")
             try:
                 reset_video_status(v["id"])
                 manager.process_inbox_video(v, mode=target_mode)
+                success_count += 1
             except Exception as e:
                 st.error(f"Lỗi video {v['platform_video_id']}: {e}")
             progress_bar.progress((idx + 1) / len(target_vids))
 
-        st.session_state["selected_inbox_ids"].clear()
-        status_text.success(f"🎉 Đã hoàn tất xử lý {len(target_vids)} video! Video đã chuyển sang Tab **🚀 3. Kho Sẵn Sàng Upload**.")
+        for v in target_vids:
+            st.session_state[f"sel_vid_{v['id']}"] = False
+
+        status_text.success(f"🎉 Đã hoàn tất xử lý {success_count}/{len(target_vids)} video! Video đã chuyển sang Tab **🚀 3. Kho Sẵn Sàng Upload**.")
         time.sleep(2)
         st.rerun()
 
@@ -303,7 +309,6 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
         for v in filtered_videos:
             raw_path = Path(v["raw_video_path"])
             vid_id = v["id"]
-            is_checked = vid_id in selected_ids
             is_failed = v.get("processed_status") == "failed"
 
             with st.container():
@@ -312,13 +317,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                 )
 
                 with col_chk:
-                    checked = st.checkbox(f"Chọn {vid_id}", value=is_checked, key=f"tbl_chk_{vid_id}", label_visibility="collapsed")
-                    if checked != is_checked:
-                        if checked:
-                            st.session_state["selected_inbox_ids"].add(vid_id)
-                        else:
-                            st.session_state["selected_inbox_ids"].discard(vid_id)
-                        st.rerun()
+                    st.checkbox(f"Chọn {vid_id}", key=f"sel_vid_{vid_id}", label_visibility="collapsed")
 
                 with col_plat:
                     st.markdown(f"`{v['platform'].upper()}`")
@@ -352,6 +351,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                             try:
                                 reset_video_status(vid_id)
                                 manager.process_inbox_video(v, mode="remix")
+                                st.session_state[f"sel_vid_{vid_id}"] = False
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Lỗi: {e}")
@@ -362,6 +362,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                             try:
                                 reset_video_status(vid_id)
                                 manager.process_inbox_video(v, mode="dub")
+                                st.session_state[f"sel_vid_{vid_id}"] = False
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Lỗi: {e}")
@@ -369,6 +370,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                 with col_btn_x:
                     if st.button("🗑️", key=f"tbl_x_{vid_id}", help="Bỏ qua video này"):
                         mark_as_skipped(vid_id)
+                        st.session_state[f"sel_vid_{vid_id}"] = False
                         st.rerun()
 
             st.divider()
@@ -379,7 +381,6 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
         for idx, v in enumerate(filtered_videos):
             raw_path = Path(v["raw_video_path"])
             vid_id = v["id"]
-            is_checked = vid_id in selected_ids
             is_failed = v.get("processed_status") == "failed"
 
             with cols[idx % 3]:
@@ -387,13 +388,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                     # Checkbox chọn card
                     c_card_chk, c_card_tag = st.columns([1, 3])
                     with c_card_chk:
-                        chk_val = st.checkbox("Chọn", value=is_checked, key=f"grid_chk_{vid_id}")
-                        if chk_val != is_checked:
-                            if chk_val:
-                                st.session_state["selected_inbox_ids"].add(vid_id)
-                            else:
-                                st.session_state["selected_inbox_ids"].discard(vid_id)
-                            st.rerun()
+                        st.checkbox("Chọn", key=f"sel_vid_{vid_id}")
                     with c_card_tag:
                         st.caption(f"[{v['platform'].upper()}] • {v['downloaded_at'][:16]}")
 
@@ -415,6 +410,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                             try:
                                 reset_video_status(vid_id)
                                 manager.process_inbox_video(v, mode="remix")
+                                st.session_state[f"sel_vid_{vid_id}"] = False
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Lỗi: {e}")
@@ -423,12 +419,14 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                             try:
                                 reset_video_status(vid_id)
                                 manager.process_inbox_video(v, mode="dub")
+                                st.session_state[f"sel_vid_{vid_id}"] = False
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Lỗi: {e}")
                     with col_b3:
                         if st.button("🗑️", key=f"grid_x_{vid_id}", use_container_width=True):
                             mark_as_skipped(vid_id)
+                            st.session_state[f"sel_vid_{vid_id}"] = False
                             st.rerun()
 
 
