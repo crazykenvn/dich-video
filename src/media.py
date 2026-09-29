@@ -229,12 +229,14 @@ def get_subtitle_ass_style(
     sub_position: str = "bottom",
     sub_margin_v: int = 30,
     box_padding: int = 5,
+    box_opacity: float | int = 100,
 ) -> str:
     """Tạo chuỗi force_style cho libass.
     - font_size: Cỡ chữ phụ đề (px).
     - box_padding: Độ dày / chiều cao của hộp đè (Outline trong BorderStyle=3).
     - sub_position: 'bottom' (Alignment=2), 'middle' (Alignment=5), 'top' (Alignment=8).
     - sub_margin_v: Khoảng cách pixel từ cạnh đáy/đỉnh.
+    - box_opacity: Tỷ lệ che phủ / mờ của hộp đè (% từ 0 đến 100).
     """
     align = 2
     if sub_position == "middle":
@@ -245,36 +247,45 @@ def get_subtitle_ass_style(
     margin_v = max(0, int(sub_margin_v or 30))
     outline = max(1, int(box_padding or 5))
 
-    if sub_style == "solid_black":
-        # Nền đen đặc 100% (Alpha=&H00), viền dày theo box_padding che kín hoàn toàn chữ gốc
+    # Xử lý box_opacity (% từ 0-100 hoặc float 0.0-1.0)
+    try:
+        op_val = float(box_opacity)
+        if op_val > 1.0:
+            op = max(0.0, min(1.0, op_val / 100.0))
+        else:
+            op = max(0.0, min(1.0, op_val))
+    except (ValueError, TypeError):
+        op = 1.0
+
+    # Tương thích ngược kiểu cũ nếu chọn black_box / white_box mà không truyền opacity riêng
+    if box_opacity == 100 or box_opacity == 1.0:
+        if sub_style == "black_box":
+            op = 0.60
+        elif sub_style == "white_box":
+            op = 0.60
+
+    # Trong ASS: &HAABBGGRR, AA: 00 = đặc 100%, FF = trong suốt 0%
+    alpha_int = int(round((1.0 - op) * 255))
+    alpha_hex = f"{alpha_int:02X}"
+
+    if sub_style in ("solid_black", "black_box"):
+        # Nền đen với độ mờ tùy chỉnh, chữ trắng
         return (
             f"FontName={font_name},FontSize={font_size},"
-            f"PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,"
+            f"PrimaryColour=&H00FFFFFF,OutlineColour=&H{alpha_hex}000000,BackColour=&H{alpha_hex}000000,"
             f"BorderStyle=3,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
         )
-    elif sub_style == "solid_white":
-        # Nền trắng đặc 100% (Alpha=&H00), chữ đen
+    elif sub_style in ("solid_white", "white_box"):
+        # Nền trắng với độ mờ tùy chỉnh, chữ đen
         return (
             f"FontName={font_name},FontSize={font_size},"
-            f"PrimaryColour=&H00000000,OutlineColour=&H00FFFFFF,BackColour=&H00FFFFFF,"
-            f"BorderStyle=3,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
-        )
-    elif sub_style == "white_box":
-        return (
-            f"FontName={font_name},FontSize={font_size},"
-            f"PrimaryColour=&H00000000,OutlineColour=&H70FFFFFF,BackColour=&H70FFFFFF,"
-            f"BorderStyle=3,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
-        )
-    elif sub_style == "black_box":
-        return (
-            f"FontName={font_name},FontSize={font_size},"
-            f"PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BackColour=&H80000000,"
+            f"PrimaryColour=&H00000000,OutlineColour=&H{alpha_hex}FFFFFF,BackColour=&H{alpha_hex}FFFFFF,"
             f"BorderStyle=3,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
         )
     else:  # classic
         return (
             f"FontName={font_name},FontSize={font_size},"
-            f"PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,"
+            f"PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&HFF000000,"
             f"BorderStyle=1,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
         )
 
@@ -292,6 +303,7 @@ def mux_audio(
     sub_position: str = "bottom",
     sub_margin_v: int = 30,
     box_padding: int = 5,
+    box_opacity: float | int = 100,
     watermark_enabled: bool = False,
     watermark_path: Path | str | None = None,
     watermark_opacity: float = 0.18,
@@ -363,6 +375,7 @@ def mux_audio(
             sub_position=sub_position,
             sub_margin_v=sub_margin_v,
             box_padding=box_padding,
+            box_opacity=box_opacity,
         )
         filter_complex_parts.append(
             f"[{cur_v}]subtitles='{srt_escaped}':force_style='{style}'[v_sub]"
@@ -461,6 +474,7 @@ def remix_video(
     sub_position: str = "bottom",
     sub_margin_v: int = 30,
     box_padding: int = 5,
+    box_opacity: float | int = 100,
 ) -> Path:
     """Xử lý video nhanh không cần dịch:
     - Biến điệu âm thanh gốc (giữ tiếng gốc nhưng phá vỡ Acoustic Fingerprint).
@@ -519,6 +533,7 @@ def remix_video(
             sub_position=sub_position,
             sub_margin_v=sub_margin_v,
             box_padding=box_padding,
+            box_opacity=box_opacity,
         )
         filter_complex_parts.append(f"[{cur_v}]subtitles='{srt_escaped}':force_style='{style}'[v_sub]")
         cur_v = "v_sub"
@@ -589,6 +604,8 @@ def burn_subtitles(
     sub_style: str = "solid_black",
     sub_position: str = "bottom",
     sub_margin_v: int = 30,
+    box_padding: int = 5,
+    box_opacity: float | int = 100,
     video_quality: str = "high",
     anti_video: bool = False,
     anti_audio: bool = False,
@@ -606,6 +623,8 @@ def burn_subtitles(
         sub_style=sub_style,
         sub_position=sub_position,
         sub_margin_v=sub_margin_v,
+        box_padding=box_padding,
+        box_opacity=box_opacity,
     )
 
 

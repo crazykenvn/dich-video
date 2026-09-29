@@ -228,7 +228,8 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
         cur_font_size = int(st.session_state.get(f"active_font_size_{vid_id}", 16))
         cur_box_padding = int(st.session_state.get(f"active_box_padding_{vid_id}", 5))
         cur_box_width = int(st.session_state.get(f"active_box_width_{vid_id}", 92))
-        cur_style = st.session_state.get(f"active_style_{vid_id}", "solid_black")
+        cur_style = st.session_state.get(f"active_style_{vid_id}", cfg.get("sub_style", "solid_black"))
+        cur_opacity = int(st.session_state.get(f"active_box_opacity_{vid_id}", cfg.get("box_opacity", 100)))
 
         # 3. Custom component kéo thả & co giãn trực quan
         res = subtitle_drag_picker(
@@ -239,6 +240,7 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
             font_size=cur_font_size,
             box_padding=cur_box_padding,
             box_width=cur_box_width,
+            box_opacity=cur_opacity,
             sub_style=cur_style,
             sample_text="Đây là phụ đề tiếng Việt mẫu đè lên chữ gốc",
             key=f"drag_cmp_{vid_id}_{int(seek_sec*10)}",
@@ -271,22 +273,43 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
         sz = round(raw_path.stat().st_size / (1024 * 1024), 1)
         st.caption(f"📏 Gốc: `{w}×{h}` ({aspect_label}) | 📁 Size: `{sz} MB`")
 
+        style_list = ["solid_black", "solid_white", "classic"]
+        norm_map = {"black_box": "solid_black", "white_box": "solid_white"}
+        cur_norm_style = norm_map.get(cur_style, cur_style)
+        if cur_norm_style not in style_list:
+            cur_norm_style = "solid_black"
+
         new_style = st.selectbox(
             "Kiểu che phụ đề:",
-            ["solid_black", "solid_white", "black_box", "white_box", "classic"],
-            index=["solid_black", "solid_white", "black_box", "white_box", "classic"].index(cur_style),
+            style_list,
+            index=style_list.index(cur_norm_style),
             format_func=lambda x: {
-                "solid_black": "⬛ Hộp đen đặc 100% (Khuyên dùng)",
-                "solid_white": "⬜ Hộp trắng đặc 100%",
-                "black_box": "◾ Hộp đen mờ 60%",
-                "white_box": "◽ Hộp trắng mờ 60%",
+                "solid_black": "⬛ Hộp nền đen (Khuyên dùng)",
+                "solid_white": "⬜ Hộp nền trắng",
                 "classic": "🔤 Chữ viền (Không hộp)",
             }[x],
             key=f"select_style_{vid_id}",
         )
         if new_style != cur_style:
             st.session_state[f"active_style_{vid_id}"] = new_style
+            cur_style = new_style
             st.rerun()
+
+        if new_style != "classic":
+            new_opacity = st.slider(
+                "Độ che phủ hộp đè (%):",
+                min_value=10,
+                max_value=100,
+                value=cur_opacity,
+                step=5,
+                help="Tùy chỉnh tỷ lệ che phủ: 100% che kín hoàn toàn chữ Trung gốc; giảm dần nếu muốn mờ nhìn thấy nền video.",
+                key=f"slider_op_{vid_id}",
+            )
+            if new_opacity != cur_opacity:
+                st.session_state[f"active_box_opacity_{vid_id}"] = new_opacity
+                cur_opacity = new_opacity
+        else:
+            cur_opacity = 0
 
         chosen_pos = st.selectbox(
             "Vùng đặt sub:",
@@ -360,9 +383,11 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
             custom_cfg = {
                 "sub_position": chosen_pos,
                 "sub_style": new_style,
+                "box_opacity": cur_opacity,
                 "sub_margin_v": cur_margin_v,
                 "font_size": cur_font_size,
                 "box_padding": cur_box_padding,
+                "box_width": cur_box_width,
             }
             try:
                 reset_video_status(vid_id)
@@ -439,7 +464,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
     st.markdown("---")
 
     with st.expander("🎯 Tùy chỉnh vị trí đè Sub cho nhóm video (áp dụng khi Dịch hàng loạt)", expanded=False):
-        c_bp, c_bs, c_bm = st.columns(3)
+        c_bp, c_bs, c_bo, c_bm = st.columns(4)
         with c_bp:
             bulk_sub_pos = st.selectbox(
                 "Vị trí đặt sub:",
@@ -450,22 +475,33 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
         with c_bs:
             bulk_sub_style = st.selectbox(
                 "Kiểu che phụ đề:",
-                ["solid_black", "solid_white", "black_box", "white_box", "classic"],
+                ["solid_black", "solid_white", "classic"],
                 format_func=lambda x: {
-                    "solid_black": "⬛ Hộp đen đặc che kín 100% (Khuyên dùng)",
-                    "solid_white": "⬜ Hộp trắng đặc che kín 100%",
-                    "black_box": "◾ Hộp đen mờ 60%",
-                    "white_box": "◽ Hộp trắng mờ 60%",
+                    "solid_black": "⬛ Hộp nền đen (Khuyên dùng)",
+                    "solid_white": "⬜ Hộp nền trắng",
                     "classic": "🔤 Chữ viền (Không hộp)",
                 }[x],
                 key="bulk_sub_style",
             )
+        with c_bo:
+            if bulk_sub_style != "classic":
+                bulk_box_opacity = st.slider(
+                    "Độ che phủ (%):",
+                    min_value=10,
+                    max_value=100,
+                    value=int(cfg.get("box_opacity", 100)),
+                    step=5,
+                    key="bulk_box_opacity",
+                    help="Tỷ lệ mờ của hộp đè lên sub gốc: 100% là che kín hoàn toàn; giảm bớt nếu muốn mờ nhìn thấy nền.",
+                )
+            else:
+                bulk_box_opacity = 0
         with c_bm:
             bulk_margin_v = st.slider(
                 "Độ cao cách đáy (MarginV px):",
                 min_value=5,
                 max_value=300,
-                value=35,
+                value=int(cfg.get("sub_margin_v", 30)),
                 step=5,
                 key="bulk_margin_v",
                 help="Tăng giá trị này để đẩy phụ đề dịch lên cao đè vừa khít dòng chữ tiếng Trung gốc.",
@@ -523,6 +559,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
         bulk_settings = {
             "sub_position": bulk_sub_pos,
             "sub_style": bulk_sub_style,
+            "box_opacity": bulk_box_opacity,
             "sub_margin_v": bulk_margin_v,
         } if btn_bulk_dub else None
 
@@ -928,7 +965,7 @@ def render_tab_settings() -> None:
 
         # 4.3. Phụ đề & Che phụ đề gốc (Hardsub Overlay)
         st.markdown("#### 🎯 3. Vị Trí Đè Sub Gốc & Kiểu Phụ Đề Mặc Định")
-        c_sub1, c_sub2, c_sub3 = st.columns(3)
+        c_sub1, c_sub2, c_sub3, c_sub4 = st.columns(4)
         with c_sub1:
             sub_pos_opts = ["bottom", "middle", "top"]
             cur_sp = cfg.get("sub_position", "bottom")
@@ -940,22 +977,37 @@ def render_tab_settings() -> None:
                 index=sp_idx,
             )
         with c_sub2:
-            style_opts = ["solid_black", "solid_white", "black_box", "white_box", "classic"]
+            style_opts = ["solid_black", "solid_white", "classic"]
             cur_sty = cfg.get("sub_style", "solid_black")
+            if cur_sty == "black_box":
+                cur_sty = "solid_black"
+            elif cur_sty == "white_box":
+                cur_sty = "solid_white"
             sty_idx = style_opts.index(cur_sty) if cur_sty in style_opts else 0
             cfg["sub_style"] = st.selectbox(
                 "Kiểu che phụ đề:",
                 options=style_opts,
                 format_func=lambda x: {
-                    "solid_black": "⬛ Hộp đen đặc che kín 100% (Khuyên dùng)",
-                    "solid_white": "⬜ Hộp trắng đặc che kín 100%",
-                    "black_box": "◾ Hộp đen mờ 60%",
-                    "white_box": "◽ Hộp trắng mờ 60%",
+                    "solid_black": "⬛ Hộp nền đen (Khuyên dùng)",
+                    "solid_white": "⬜ Hộp nền trắng",
                     "classic": "🔤 Chữ viền (Không hộp)",
                 }[x],
                 index=sty_idx,
             )
         with c_sub3:
+            if cfg["sub_style"] != "classic":
+                cfg["box_opacity"] = st.slider(
+                    "Độ che phủ hộp đè (%):",
+                    min_value=10,
+                    max_value=100,
+                    value=int(cfg.get("box_opacity", 100)),
+                    step=5,
+                    help="Tỷ lệ mờ của hộp đè lên sub gốc: 100% là đen/trắng đặc che kín chữ Trung gốc; giảm dần nếu muốn nhìn mờ nền video.",
+                )
+            else:
+                cfg["box_opacity"] = 0
+                st.caption("Chữ viền không dùng hộp che.")
+        with c_sub4:
             cfg["sub_margin_v"] = st.slider(
                 "Độ cao cách đáy (MarginV px):",
                 min_value=5,

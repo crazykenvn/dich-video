@@ -303,6 +303,7 @@
     let boxPadding = 5;
     let boxWidth = 92;
     let currentStyle = 'solid_black';
+    let boxOpacity = 100;
 
     // Drag/Resize State
     let isDragging = false;
@@ -379,6 +380,25 @@
       // Box width
       subBox.style.width = `${boxWidth}%`;
       subBox.style.left = `${(100 - boxWidth) / 2}%`;
+
+      // Dynamic opacity & background
+      const alpha = Math.max(0, Math.min(100, boxOpacity)) / 100;
+      if (currentStyle === 'solid_black' || currentStyle === 'black_box') {
+        subBox.style.backgroundColor = `rgba(0, 0, 0, ${alpha})`;
+        subBox.style.color = '#ffffff';
+        subBox.style.border = alpha > 0.05 ? '1px solid rgba(255, 255, 255, 0.25)' : '1px dashed rgba(255, 255, 255, 0.4)';
+        subBox.style.textShadow = 'none';
+      } else if (currentStyle === 'solid_white' || currentStyle === 'white_box') {
+        subBox.style.backgroundColor = `rgba(255, 255, 255, ${alpha})`;
+        subBox.style.color = '#000000';
+        subBox.style.border = alpha > 0.05 ? '1px solid rgba(0, 0, 0, 0.25)' : '1px dashed rgba(0, 0, 0, 0.4)';
+        subBox.style.textShadow = 'none';
+      } else {
+        subBox.style.backgroundColor = 'transparent';
+        subBox.style.color = '#ffffff';
+        subBox.style.border = '1px dashed rgba(255, 255, 255, 0.4)';
+        subBox.style.textShadow = '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 4px rgba(0,0,0,0.8)';
+      }
 
       lblFontsize.innerText = `${fontSize}px`;
       lblPadding.innerText = `${boxPadding}px`;
@@ -578,7 +598,12 @@
         lblRes.innerText = `📏 ${videoW} × ${videoH} px (${videoW < videoH ? 'Dọc 9:16' : 'Ngang 16:9'})`;
 
         if (args.sub_style) {
+          currentStyle = args.sub_style;
           subBox.className = 'sub-box style-' + args.sub_style;
+        }
+
+        if (args.box_opacity !== undefined && args.box_opacity !== null) {
+          boxOpacity = parseInt(args.box_opacity);
         }
 
         if (args.sample_text) {

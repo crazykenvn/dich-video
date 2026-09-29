@@ -36,6 +36,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "font_size": 16,
     "box_padding": 5,
     "sub_style": "solid_black",
+    "box_opacity": 100,  # Độ mờ / che phủ của hộp phụ đề (% từ 10% đến 100%)
     "sub_position": "bottom",
     "sub_margin_v": 30,
     "video_quality": "high",

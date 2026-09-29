@@ -287,6 +287,7 @@ class DownloadManager:
                     sub_position=cfg.get("sub_position", "bottom"),
                     sub_margin_v=cfg.get("sub_margin_v", 30),
                     box_padding=cfg.get("box_padding", 5),
+                    box_opacity=cfg.get("box_opacity", 100),
                     watermark_enabled=cfg.get("watermark_enabled", True),
                     watermark_path=actual_wm,
                     watermark_text=cfg.get("watermark_text"),
