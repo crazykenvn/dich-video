@@ -88,6 +88,67 @@ def duration_seconds(path: Path) -> float:
     return float(raw)
 
 
+def get_video_resolution(video_path: Path) -> tuple[int, int]:
+    """Lấy độ phân giải chuẩn (width, height) của video, tính cả góc xoay (rotate)."""
+    try:
+        info = probe(video_path)
+        for s in info.get("streams", []):
+            if s.get("codec_type") == "video":
+                w = int(s.get("width", 1080))
+                h = int(s.get("height", 1920))
+                rot = s.get("tags", {}).get("rotate")
+                if rot is None:
+                    side_data = s.get("side_data_list", [])
+                    for sd in side_data:
+                        if "rotation" in sd:
+                            rot = sd.get("rotation")
+                            break
+                if rot and int(float(rot)) in (90, 270, -90, -270):
+                    w, h = h, w
+                return w, h
+    except Exception:
+        pass
+    return (1080, 1920)
+
+
+def extract_preview_frame(video_path: Path, timestamp_sec: float = 1.0) -> str:
+    """Trích xuất 1 khung hình tại giây timestamp_sec và trả về chuỗi data URL base64 JPEG."""
+    import base64
+    from .config import OUTPUT_DIR
+
+    thumb_dir = OUTPUT_DIR / "thumbnails"
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    thumb_file = thumb_dir / f"{video_path.stem}_{int(timestamp_sec * 10)}f.jpg"
+
+    if not thumb_file.exists() or thumb_file.stat().st_size == 0:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(max(0.1, timestamp_sec)),
+            "-i",
+            str(video_path),
+            "-vframes",
+            "1",
+            "-q:v",
+            "2",
+            str(thumb_file),
+        ]
+        try:
+            _run(cmd)
+        except Exception:
+            cmd[3] = "0.0"
+            try:
+                _run(cmd)
+            except Exception:
+                return ""
+
+    if thumb_file.exists() and thumb_file.stat().st_size > 0:
+        raw_b64 = base64.b64encode(thumb_file.read_bytes()).decode("ascii")
+        return f"data:image/jpeg;base64,{raw_b64}"
+    return ""
+
+
 def extract_audio(video_path: Path, wav_path: Path, sample_rate: int = 16000) -> Path:
     wav_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = wav_path.with_suffix(".tmp.wav")

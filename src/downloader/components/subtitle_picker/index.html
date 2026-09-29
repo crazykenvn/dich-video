@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subtitle Drag & Drop Placement</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body {
+      background-color: #0f172a;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding: 8px;
+      overflow: hidden;
+    }
+    .wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+    }
+    .hud-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      max-width: 640px;
+      background: rgba(30, 41, 59, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+    .badge {
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    .badge-res {
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+    .badge-margin {
+      background: rgba(34, 197, 94, 0.2);
+      color: #22c55e;
+      border: 1px solid rgba(34, 197, 94, 0.5);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .presets {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: center;
+      width: 100%;
+      max-width: 640px;
+    }
+    .btn-preset {
+      background: #1e293b;
+      color: #cbd5e1;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-preset:hover {
+      background: #334155;
+      color: #fff;
+      border-color: #38bdf8;
+    }
+    .stage-container {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
+      border: 2px solid #334155;
+      background: #020617;
+      cursor: crosshair;
+    }
+    #preview-img {
+      display: block;
+      max-height: 440px;
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      pointer-events: none;
+    }
+    .sub-box {
+      position: absolute;
+      left: 4%;
+      width: 92%;
+      cursor: grab;
+      border-radius: 4px;
+      padding: 6px 10px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.3;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+      transition: box-shadow 0.15s, outline 0.15s;
+      outline: 2px dashed #38bdf8;
+      z-index: 10;
+    }
+    .sub-box:active, .sub-box.dragging {
+      cursor: grabbing;
+      outline: 2px solid #22c55e;
+      box-shadow: 0 0 15px rgba(34, 197, 94, 0.7);
+    }
+    .drag-handle {
+      position: absolute;
+      top: -10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #38bdf8;
+      color: #0f172a;
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      pointer-events: none;
+    }
+    /* Styles */
+    .style-solid_black {
+      background-color: #000000;
+      color: #ffffff;
+      border: 1px solid #475569;
+    }
+    .style-solid_white {
+      background-color: #ffffff;
+      color: #000000;
+      border: 1px solid #000000;
+    }
+    .style-black_box {
+      background-color: rgba(0, 0, 0, 0.65);
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+    .style-white_box {
+      background-color: rgba(255, 255, 255, 0.75);
+      color: #000000;
+      border: 1px solid rgba(0, 0, 0, 0.3);
+    }
+    .style-classic {
+      background-color: transparent;
+      color: #ffffff;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 4px rgba(0,0,0,0.8);
+      border: 1px dashed rgba(255,255,255,0.4);
+    }
+    .help-text {
+      font-size: 12px;
+      color: #94a3b8;
+      text-align: center;
+      max-width: 640px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper" id="app-wrapper">
+    <!-- HUD BAR -->
+    <div class="hud-header">
+      <span class="badge badge-res" id="lbl-res">📏 1080 × 1920 px</span>
+      <span id="lbl-preview-sz" style="color: #94a3b8; font-size: 11px;">Preview: ---</span>
+      <span class="badge badge-margin" id="lbl-margin">🎯 MarginV: -- px</span>
+    </div>
+
+    <!-- PRESET SNAP BUTTONS -->
+    <div class="presets">
+      <button class="btn-preset" onclick="snapPercent(0.04)">⬇️ Đáy chuẩn (4%)</button>
+      <button class="btn-preset" onclick="snapPercent(0.08)">🎯 Che Sub gốc (8%)</button>
+      <button class="btn-preset" onclick="snapPercent(0.14)">🎯 Che Sub gốc (14%)</button>
+      <button class="btn-preset" onclick="snapPercent(0.20)">🎯 Che Sub gốc (20%)</button>
+      <button class="btn-preset" onclick="snapPercent(0.50)">🎯 Giữa clip (50%)</button>
+      <button class="btn-preset" onclick="snapPercent(0.88)">⬆️ Đỉnh (88%)</button>
+    </div>
+
+    <!-- VIDEO FRAME PREVIEW & DRAGGABLE BOX -->
+    <div class="stage-container" id="stage" onclick="onStageClick(event)">
+      <img id="preview-img" alt="Video Frame Preview" src="" />
+      <div id="sub-box" class="sub-box style-solid_black">
+        <span class="drag-handle">↕️ KÉO ĐÈ SUB</span>
+        <span id="sub-text">Đây là phụ đề tiếng Việt mẫu đè lên chữ gốc</span>
+      </div>
+    </div>
+
+    <!-- HELPER HINT -->
+    <div class="help-text">
+      💡 <b>Cách dùng:</b> Kéo giữ hộp chữ nhật hoặc <b>click trực tiếp</b> vào dòng chữ tiếng Trung trên màn hình để đặt vị trí. Tọa độ <code>MarginV</code> (px) sẽ tự động khớp theo kích thước video gốc.
+    </div>
+  </div>
+
+  <script>
+    // State
+    let videoW = 1080;
+    let videoH = 1920;
+    let currentMarginV = 40;
+    let currentStyle = 'solid_black';
+    let isDragging = false;
+    let dragStartY = 0;
+    let boxStartTop = 0;
+    let lastReportedMarginV = null;
+
+    const stage = document.getElementById('stage');
+    const previewImg = document.getElementById('preview-img');
+    const subBox = document.getElementById('sub-box');
+    const lblRes = document.getElementById('lbl-res');
+    const lblPreviewSz = document.getElementById('lbl-preview-sz');
+    const lblMargin = document.getElementById('lbl-margin');
+    const subText = document.getElementById('sub-text');
+
+    function sendToStreamlit(type, data) {
+      window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: type,
+        ...data
+      }, '*');
+    }
+
+    function notifyHeight() {
+      const height = document.documentElement.scrollHeight || document.body.scrollHeight;
+      sendToStreamlit('streamlit:setFrameHeight', { height: Math.max(height, 530) });
+    }
+
+    function emitValue(marginV) {
+      if (marginV === lastReportedMarginV) return;
+      lastReportedMarginV = marginV;
+
+      const percent = ((marginV / videoH) * 100).toFixed(1);
+      lblMargin.innerText = `🎯 MarginV: ${marginV} px (${percent}%)`;
+
+      const subPos = marginV > (videoH * 0.7) ? 'top' : (marginV > (videoH * 0.4) ? 'middle' : 'bottom');
+
+      sendToStreamlit('streamlit:setComponentValue', {
+        value: {
+          margin_v: marginV,
+          percent_from_bottom: parseFloat(percent),
+          sub_position: subPos,
+          video_w: videoW,
+          video_h: videoH,
+          preview_w: previewImg.clientWidth,
+          preview_h: previewImg.clientHeight
+        }
+      });
+    }
+
+    function updateBoxPositionFromMarginV(marginV) {
+      const stageH = previewImg.clientHeight || 400;
+      if (stageH <= 0) return;
+
+      const scale = stageH / videoH;
+      const boxH = subBox.offsetHeight || 34;
+
+      const marginVPreview = marginV * scale;
+      let top = stageH - marginVPreview - boxH;
+
+      top = Math.max(0, Math.min(stageH - boxH, top));
+      subBox.style.top = top + 'px';
+
+      const percent = ((marginV / videoH) * 100).toFixed(1);
+      lblMargin.innerText = `🎯 MarginV: ${marginV} px (${percent}%)`;
+      lblPreviewSz.innerText = `Preview: ${previewImg.clientWidth} × ${stageH} px`;
+    }
+
+    function calculateMarginVFromBox() {
+      const stageH = previewImg.clientHeight || 400;
+      const boxH = subBox.offsetHeight || 34;
+      const boxTop = subBox.offsetTop;
+
+      const boxBottom = boxTop + boxH;
+      const distFromBottom = Math.max(0, stageH - boxBottom);
+
+      const scale = videoH / stageH;
+      let marginV = Math.round(distFromBottom * scale);
+      marginV = Math.max(5, Math.min(videoH - 60, marginV));
+      return marginV;
+    }
+
+    function snapPercent(pct) {
+      const marginV = Math.round(videoH * pct);
+      currentMarginV = marginV;
+      updateBoxPositionFromMarginV(marginV);
+      emitValue(marginV);
+    }
+
+    function onStageClick(e) {
+      if (e.target === subBox || subBox.contains(e.target)) return;
+
+      const stageRect = stage.getBoundingClientRect();
+      const clickY = e.clientY - stageRect.top;
+      const boxH = subBox.offsetHeight || 34;
+      const stageH = previewImg.clientHeight || 400;
+
+      let newTop = clickY - (boxH / 2);
+      newTop = Math.max(0, Math.min(stageH - boxH, newTop));
+      subBox.style.top = newTop + 'px';
+
+      const marginV = calculateMarginVFromBox();
+      emitValue(marginV);
+    }
+
+    // Drag handlers
+    subBox.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      subBox.classList.add('dragging');
+      dragStartY = e.clientY;
+      boxStartTop = subBox.offsetTop;
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const stageH = previewImg.clientHeight || 400;
+      const boxH = subBox.offsetHeight || 34;
+      const deltaY = e.clientY - dragStartY;
+
+      let newTop = boxStartTop + deltaY;
+      newTop = Math.max(0, Math.min(stageH - boxH, newTop));
+      subBox.style.top = newTop + 'px';
+
+      const marginV = calculateMarginVFromBox();
+      const percent = ((marginV / videoH) * 100).toFixed(1);
+      lblMargin.innerText = `🎯 MarginV: ${marginV} px (${percent}%)`;
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!isDragging) return;
+      isDragging = false;
+      subBox.classList.remove('dragging');
+      const marginV = calculateMarginVFromBox();
+      emitValue(marginV);
+    });
+
+    // Touch support
+    subBox.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        isDragging = true;
+        subBox.classList.add('dragging');
+        dragStartY = e.touches[0].clientY;
+        boxStartTop = subBox.offsetTop;
+      }
+    }, { passive: true });
+
+    window.addEventListener('touchmove', (e) => {
+      if (!isDragging || e.touches.length !== 1) return;
+      const stageH = previewImg.clientHeight || 400;
+      const boxH = subBox.offsetHeight || 34;
+      const deltaY = e.touches[0].clientY - dragStartY;
+
+      let newTop = boxStartTop + deltaY;
+      newTop = Math.max(0, Math.min(stageH - boxH, newTop));
+      subBox.style.top = newTop + 'px';
+
+      const marginV = calculateMarginVFromBox();
+      const percent = ((marginV / videoH) * 100).toFixed(1);
+      lblMargin.innerText = `🎯 MarginV: ${marginV} px (${percent}%)`;
+    }, { passive: true });
+
+    window.addEventListener('touchend', () => {
+      if (!isDragging) return;
+      isDragging = false;
+      subBox.classList.remove('dragging');
+      const marginV = calculateMarginVFromBox();
+      emitValue(marginV);
+    });
+
+    // Streamlit render event listener
+    window.addEventListener('message', (event) => {
+      if (event.data.type === 'streamlit:render') {
+        const args = event.data.args || {};
+
+        if (args.video_width) videoW = parseInt(args.video_width);
+        if (args.video_height) videoH = parseInt(args.video_height);
+
+        lblRes.innerText = `📏 ${videoW} × ${videoH} px (${videoW < videoH ? 'Dọc 9:16' : 'Ngang 16:9'})`;
+
+        if (args.sub_style) {
+          subBox.className = 'sub-box style-' + args.sub_style;
+        }
+
+        if (args.sample_text) {
+          subText.innerText = args.sample_text;
+        }
+
+        if (args.default_margin_v !== undefined && args.default_margin_v !== null) {
+          currentMarginV = parseInt(args.default_margin_v);
+        }
+
+        if (args.image_b64 && previewImg.src !== args.image_b64) {
+          previewImg.src = args.image_b64;
+          previewImg.onload = () => {
+            updateBoxPositionFromMarginV(currentMarginV);
+            notifyHeight();
+          };
+        } else {
+          updateBoxPositionFromMarginV(currentMarginV);
+          notifyHeight();
+        }
+      }
+    });
+
+    // Tell Streamlit we are ready
+    sendToStreamlit('streamlit:componentReady', { apiVersion: 1 });
+    window.addEventListener('load', notifyHeight);
+  </script>
+</body>
+</html>
