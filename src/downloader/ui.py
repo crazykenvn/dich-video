@@ -333,6 +333,7 @@ def render_tab_ingestion(manager: DownloadManager) -> None:
 # =============================================================================
 @st.dialog("🎯 Kéo Thả Vị Trí Đè Sub Trực Quan", width="large")
 def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> None:
+    cfg = load_settings()
     vid_id = v["id"]
     raw_path = Path(v["raw_video_path"])
 
@@ -555,6 +556,7 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
 # =============================================================================
 def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> None:
     init_db()
+    cfg = load_settings()
     st.subheader("🔍 2. Kiểm Tra & Phân Loại Xử Lý Video (Triage Studio)")
     st.caption("Xem trước video trong Inbox, chọn một hoặc nhiều video cùng lúc để chạy Remix lách bản quyền hoặc Dịch & Lồng tiếng AI.")
 
