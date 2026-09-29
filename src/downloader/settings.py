@@ -13,7 +13,7 @@ SETTINGS_FILE = OUTPUT_DIR / "settings.json"
 DEFAULT_SETTINGS: dict[str, Any] = {
     # 1. Thương hiệu & Logo
     "watermark_enabled": True,
-    "watermark_type": "text",  # "text" hoặc "image"
+    "watermark_type": "image",  # "image" (chọn file ảnh) hoặc "text" (nhập chữ)
     "watermark_text": "KEN VIDEO",
     "watermark_path": None,
     "watermark_width": 180,

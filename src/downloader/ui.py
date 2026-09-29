@@ -774,7 +774,7 @@ def render_tab_settings() -> None:
 
     cfg = load_settings()
 
-    with st.form("settings_form"):
+    with st.container():
         # 4.1. Lớp giáp lách bản quyền & Logo
         st.markdown("#### 🛡️ 1. Lớp Giáp Lách Bản Quyền & Logo Thương Hiệu")
         col_ad1, col_ad2 = st.columns(2)
@@ -796,16 +796,14 @@ def render_tab_settings() -> None:
         cfg["watermark_enabled"] = st.checkbox("Bật chèn Logo chuyển động", value=cfg.get("watermark_enabled", True))
 
         if cfg["watermark_enabled"]:
-            col_type1, col_type2 = st.columns([1.5, 2.5])
-            with col_type1:
-                wm_type = st.radio(
-                    "Định dạng Logo:",
-                    ["text", "image"],
-                    format_func=lambda x: "🔤 Chữ thương hiệu (Text)" if x == "text" else "🖼️ File ảnh Logo (PNG / JPG)",
-                    index=0 if cfg.get("watermark_type", "text") == "text" else 1,
-                    horizontal=True,
-                )
-                cfg["watermark_type"] = wm_type
+            wm_type = st.radio(
+                "Định dạng Logo:",
+                ["image", "text"],
+                format_func=lambda x: "🖼️ File ảnh Logo (PNG / JPG)" if x == "image" else "🔤 Chữ thương hiệu (Text)",
+                index=0 if cfg.get("watermark_type", "image") == "image" else 1,
+                horizontal=True,
+            )
+            cfg["watermark_type"] = wm_type
 
             existing_logo_path = cfg.get("watermark_path")
             has_existing_logo = bool(existing_logo_path and Path(existing_logo_path).exists())
@@ -826,15 +824,18 @@ def render_tab_settings() -> None:
                         saved_logo_file = branding_dir / f"custom_logo{ext}"
                         saved_logo_file.write_bytes(uploaded_logo.getbuffer())
                         cfg["watermark_path"] = str(saved_logo_file)
-                        st.success(f"Đã chọn file logo: `{uploaded_logo.name}`")
+                        save_settings(cfg)
+                        st.success(f"✅ Đã lưu file logo: `{uploaded_logo.name}`")
                 with c_up2:
                     if uploaded_logo is not None:
-                        st.image(uploaded_logo, caption="Xem trước Logo", width=120)
+                        st.image(uploaded_logo, caption="Xem trước Logo mới", width=120)
                     elif has_existing_logo:
                         st.image(str(existing_logo_path), caption="Logo đang dùng", width=120)
-                        if st.checkbox("🗑️ Gỡ bỏ logo này", key="del_logo_chk"):
+                        if st.button("🗑️ Gỡ bỏ logo này", key="btn_del_logo"):
                             cfg["watermark_path"] = None
-                            st.info("Đã đánh dấu gỡ bỏ logo. Nhấn Lưu bên dưới để xác nhận.")
+                            save_settings(cfg)
+                            st.info("Đã gỡ bỏ logo.")
+                            st.rerun()
                     else:
                         st.caption("Chưa có file logo. Hãy tải lên ảnh logo của bạn.")
             else:
@@ -994,7 +995,7 @@ def render_tab_settings() -> None:
                 index=wh_idx,
             )
 
-        submit_save = st.form_submit_button("💾 LƯU CẤU HÌNH THƯƠNG HIỆU & HỆ THỐNG", use_container_width=True)
+        submit_save = st.button("💾 LƯU CẤU HÌNH THƯƠNG HIỆU & HỆ THỐNG", type="primary", use_container_width=True)
         if submit_save:
             save_settings(cfg)
             st.success("✅ Đã lưu cấu hình thành công! Mọi tác vụ sẽ tự động sử dụng thiết lập này.")
