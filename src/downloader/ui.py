@@ -794,35 +794,93 @@ def render_tab_settings() -> None:
         # Cấu hình Logo
         st.markdown("**🏷️ Logo nhận diện thương hiệu chuyển động**")
         cfg["watermark_enabled"] = st.checkbox("Bật chèn Logo chuyển động", value=cfg.get("watermark_enabled", True))
-        c_wm1, c_wm2, c_wm3 = st.columns(3)
-        with c_wm1:
-            cfg["watermark_text"] = st.text_input("Nội dung chữ Logo", value=cfg.get("watermark_text", "KEN VIDEO"))
-        with c_wm2:
-            cfg["watermark_opacity"] = st.slider(
-                "Độ mờ (Opacity)",
-                min_value=0.05,
-                max_value=0.50,
-                value=float(cfg.get("watermark_opacity", 0.18)),
-                step=0.01,
-                help="18% là độ mờ chuẩn vàng: người xem nhìn rõ nội dung nhưng bot AI không so khớp được.",
-            )
-        with c_wm3:
-            motion_choices = {
-                "drift": "Lượn sóng (Drift)",
-                "bounce": "Bật nảy (DVD)",
-                "scroll": "Chạy ngang",
-                "top_right": "Cố định trên-phải",
-                "bottom_right": "Cố định dưới-phải",
-            }
-            m_keys = list(motion_choices.keys())
-            cur_m = cfg.get("watermark_motion", "drift")
-            m_idx = m_keys.index(cur_m) if cur_m in m_keys else 0
-            cfg["watermark_motion"] = st.selectbox(
-                "Kiểu di chuyển",
-                options=m_keys,
-                format_func=lambda x: motion_choices[x],
-                index=m_idx,
-            )
+
+        if cfg["watermark_enabled"]:
+            col_type1, col_type2 = st.columns([1.5, 2.5])
+            with col_type1:
+                wm_type = st.radio(
+                    "Định dạng Logo:",
+                    ["text", "image"],
+                    format_func=lambda x: "🔤 Chữ thương hiệu (Text)" if x == "text" else "🖼️ File ảnh Logo (PNG / JPG)",
+                    index=0 if cfg.get("watermark_type", "text") == "text" else 1,
+                    horizontal=True,
+                )
+                cfg["watermark_type"] = wm_type
+
+            existing_logo_path = cfg.get("watermark_path")
+            has_existing_logo = bool(existing_logo_path and Path(existing_logo_path).exists())
+
+            if wm_type == "image":
+                c_up1, c_up2 = st.columns([2, 1], vertical_alignment="center")
+                with c_up1:
+                    uploaded_logo = st.file_uploader(
+                        "Chọn file ảnh Logo (khuyên dùng PNG trong suốt / nền rỗng):",
+                        type=["png", "jpg", "jpeg", "webp"],
+                        key="branding_logo_uploader",
+                        help="Upload file logo thương hiệu của bạn. Tự động chuyển động mờ trên video để bảo vệ bản quyền.",
+                    )
+                    if uploaded_logo is not None:
+                        branding_dir = OUTPUT_DIR / "branding"
+                        branding_dir.mkdir(parents=True, exist_ok=True)
+                        ext = Path(uploaded_logo.name).suffix or ".png"
+                        saved_logo_file = branding_dir / f"custom_logo{ext}"
+                        saved_logo_file.write_bytes(uploaded_logo.getbuffer())
+                        cfg["watermark_path"] = str(saved_logo_file)
+                        st.success(f"Đã chọn file logo: `{uploaded_logo.name}`")
+                with c_up2:
+                    if uploaded_logo is not None:
+                        st.image(uploaded_logo, caption="Xem trước Logo", width=120)
+                    elif has_existing_logo:
+                        st.image(str(existing_logo_path), caption="Logo đang dùng", width=120)
+                        if st.checkbox("🗑️ Gỡ bỏ logo này", key="del_logo_chk"):
+                            cfg["watermark_path"] = None
+                            st.info("Đã đánh dấu gỡ bỏ logo. Nhấn Lưu bên dưới để xác nhận.")
+                    else:
+                        st.caption("Chưa có file logo. Hãy tải lên ảnh logo của bạn.")
+            else:
+                cfg["watermark_text"] = st.text_input(
+                    "Nội dung chữ Logo:",
+                    value=cfg.get("watermark_text", "KEN VIDEO"),
+                    help="Nhập tên kênh hoặc chữ ký thương hiệu để tự động tạo logo capsule.",
+                )
+
+            # Cấu hình kích thước, độ mờ & kiểu di chuyển
+            c_wm1, c_wm2, c_wm3 = st.columns(3)
+            with c_wm1:
+                cfg["watermark_width"] = st.slider(
+                    "Độ rộng Logo (px)",
+                    min_value=60,
+                    max_value=400,
+                    value=int(cfg.get("watermark_width", 180)),
+                    step=10,
+                    help="Kích thước chiều rộng của Logo hiển thị trên video (mặc định 180px).",
+                )
+            with c_wm2:
+                cfg["watermark_opacity"] = st.slider(
+                    "Độ mờ (Opacity)",
+                    min_value=0.05,
+                    max_value=0.50,
+                    value=float(cfg.get("watermark_opacity", 0.18)),
+                    step=0.01,
+                    help="18% là độ mờ chuẩn vàng: người xem nhìn rõ nội dung nhưng bot AI không so khớp được.",
+                )
+            with c_wm3:
+                motion_choices = {
+                    "drift": "Lượn sóng (Drift)",
+                    "bounce": "Bật nảy (DVD)",
+                    "scroll": "Chạy ngang",
+                    "top_right": "Cố định trên-phải",
+                    "bottom_right": "Cố định dưới-phải",
+                }
+                m_keys = list(motion_choices.keys())
+                cur_m = cfg.get("watermark_motion", "drift")
+                m_idx = m_keys.index(cur_m) if cur_m in m_keys else 0
+                cfg["watermark_motion"] = st.selectbox(
+                    "Kiểu di chuyển",
+                    options=m_keys,
+                    format_func=lambda x: motion_choices[x],
+                    index=m_idx,
+                )
 
         st.markdown("---")
 

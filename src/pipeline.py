@@ -71,6 +71,7 @@ class VideoTranslatePipeline:
         watermark_text: str | None = None,
         watermark_opacity: float = 0.18,
         watermark_motion: str = "drift",
+        watermark_width: int = 180,
         video_quality: str = "high",
         anti_video: bool = False,
         anti_audio: bool = False,
@@ -135,6 +136,7 @@ class VideoTranslatePipeline:
                 watermark_path=actual_wm_path,
                 watermark_opacity=watermark_opacity,
                 watermark_motion=watermark_motion,
+                watermark_width=watermark_width,
                 video_quality=video_quality,
             )
             report("Hoàn tất xử lý video.", 1.0)
@@ -258,6 +260,7 @@ class VideoTranslatePipeline:
                 watermark_path=actual_wm_path,
                 watermark_opacity=watermark_opacity,
                 watermark_motion=watermark_motion,
+                watermark_width=watermark_width,
                 video_quality=video_quality,
                 anti_video=anti_video,
                 anti_audio=anti_audio,

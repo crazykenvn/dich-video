@@ -223,6 +223,23 @@ class DownloadManager:
             if progress:
                 progress(msg, max(0.0, min(1.0, pct)))
 
+        # Chuẩn bị file logo (nếu có file ảnh hoặc sinh từ chữ)
+        actual_wm = cfg.get("watermark_path")
+        if cfg.get("watermark_enabled", True):
+            if actual_wm and not Path(actual_wm).exists():
+                actual_wm = None
+            if not actual_wm and cfg.get("watermark_text"):
+                try:
+                    from ..config import TEMP_DIR
+                    from ..watermark import generate_text_logo
+                    logo_dir = TEMP_DIR / "branding"
+                    logo_dir.mkdir(parents=True, exist_ok=True)
+                    tmp_logo = logo_dir / "text_watermark.png"
+                    generate_text_logo(cfg["watermark_text"].strip(), tmp_logo)
+                    actual_wm = str(tmp_logo)
+                except Exception:
+                    pass
+
         try:
             if mode == "remix":
                 report("Đang chạy bộ lọc lách bản quyền & chèn logo (3-6s)…", 0.3)
@@ -233,9 +250,10 @@ class DownloadManager:
                     anti_video=cfg.get("anti_video", True),
                     anti_audio=cfg.get("anti_audio", True),
                     watermark_enabled=cfg.get("watermark_enabled", True),
-                    watermark_path=cfg.get("watermark_path"),
+                    watermark_path=actual_wm,
                     watermark_opacity=cfg.get("watermark_opacity", 0.18),
                     watermark_motion=cfg.get("watermark_motion", "drift"),
+                    watermark_width=int(cfg.get("watermark_width", 180)),
                     video_quality=cfg.get("video_quality", "high"),
                 )
                 report("Hoàn tất Remix video!", 1.0)
@@ -270,9 +288,11 @@ class DownloadManager:
                     sub_margin_v=cfg.get("sub_margin_v", 30),
                     box_padding=cfg.get("box_padding", 5),
                     watermark_enabled=cfg.get("watermark_enabled", True),
-                    watermark_path=cfg.get("watermark_path"),
+                    watermark_path=actual_wm,
+                    watermark_text=cfg.get("watermark_text"),
                     watermark_opacity=cfg.get("watermark_opacity", 0.18),
                     watermark_motion=cfg.get("watermark_motion", "drift"),
+                    watermark_width=int(cfg.get("watermark_width", 180)),
                     video_quality=cfg.get("video_quality", "high"),
                     anti_video=cfg.get("anti_video", True),
                     anti_audio=cfg.get("anti_audio", True),

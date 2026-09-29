@@ -296,6 +296,7 @@ def mux_audio(
     watermark_path: Path | str | None = None,
     watermark_opacity: float = 0.18,
     watermark_motion: str = "drift",
+    watermark_width: int = 180,
     video_quality: str = "high",
     anti_video: bool = False,
     anti_audio: bool = False,
@@ -337,8 +338,9 @@ def mux_audio(
 
         x_expr, y_expr = get_watermark_motion_expr(watermark_motion)
         op = max(0.03, min(1.0, float(watermark_opacity or 0.18)))
+        wm_w = max(50, min(800, int(watermark_width or 180)))
         filter_complex_parts.append(
-            f"[2:v]format=rgba,colorchannelmixer=aa={op:.2f},scale=180:-1[wm_ready]"
+            f"[2:v]format=rgba,colorchannelmixer=aa={op:.2f},scale={wm_w}:-1[wm_ready]"
         )
         filter_complex_parts.append(
             f"[{cur_v}][wm_ready]overlay=x='{x_expr}':y='{y_expr}':shortest=1[v_wm]"
@@ -449,6 +451,7 @@ def remix_video(
     watermark_path: Path | str | None = None,
     watermark_opacity: float = 0.18,
     watermark_motion: str = "drift",
+    watermark_width: int = 180,
     video_quality: str = "high",
     srt_path: Path | None = None,
     burn_sub: bool = False,
@@ -491,8 +494,9 @@ def remix_video(
 
         x_expr, y_expr = get_watermark_motion_expr(watermark_motion)
         op = max(0.03, min(1.0, float(watermark_opacity or 0.18)))
+        wm_w = max(50, min(800, int(watermark_width or 180)))
         filter_complex_parts.append(
-            f"[1:v]format=rgba,colorchannelmixer=aa={op:.2f},scale=180:-1[wm_ready]"
+            f"[1:v]format=rgba,colorchannelmixer=aa={op:.2f},scale={wm_w}:-1[wm_ready]"
         )
         filter_complex_parts.append(
             f"[{cur_v}][wm_ready]overlay=x='{x_expr}':y='{y_expr}':shortest=1[v_wm]"
