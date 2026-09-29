@@ -3,10 +3,31 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+
+# Tự động tìm nạp và thêm đường dẫn ffmpeg/ffprobe vào PATH nếu máy chưa có
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except Exception:
+    pass
+
+for _cand in [
+    Path(sys.prefix) / "Scripts",
+    Path(sys.prefix) / "bin",
+    Path(__file__).resolve().parent.parent / ".venv" / "Scripts",
+    Path(__file__).resolve().parent.parent / "bin",
+]:
+    if _cand.exists() and (
+        (_cand / "ffmpeg.exe").exists() or (_cand / "ffmpeg").exists()
+    ):
+        if str(_cand) not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = str(_cand) + os.pathsep + os.environ.get("PATH", "")
 
 
 class FFmpegError(RuntimeError):
@@ -33,6 +54,13 @@ def _run(cmd: list[str], timeout: int = 3600) -> subprocess.CompletedProcess:
 
 
 def require_ffmpeg() -> None:
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        # Thử lại kích hoạt static_ffmpeg một lần nữa
+        try:
+            import static_ffmpeg
+            static_ffmpeg.add_paths()
+        except Exception:
+            pass
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         raise FFmpegError("Cần ffmpeg và ffprobe trong PATH trước khi chạy pipeline.")
 

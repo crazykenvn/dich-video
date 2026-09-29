@@ -26,6 +26,7 @@ from .db import (
     delete_account,
     delete_downloaded_video,
     get_accounts,
+    get_failed_videos,
     get_inbox_videos,
     get_ready_videos,
     get_recent_videos,
@@ -33,6 +34,7 @@ from .db import (
     mark_as_skipped,
     mark_as_uploaded,
     record_download,
+    reset_video_status,
     update_account_status,
 )
 from .manager import DOWNLOADS_DIR, DownloadManager
@@ -187,6 +189,10 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
     st.caption("Xem trước video trong Inbox, chọn một hoặc nhiều video cùng lúc để chạy Remix lách bản quyền hoặc Dịch & Lồng tiếng AI.")
 
     inbox_videos = get_inbox_videos()
+    failed_videos = get_failed_videos()
+
+    if failed_videos:
+        st.warning(f"⚠️ Phát hiện {len(failed_videos)} video bị lỗi xử lý trước đó. Bạn có thể bấm '🔄 Thử lại' trực tiếp tại từng video bên dưới.")
 
     if not inbox_videos:
         st.info("🎉 Hộp thư Inbox hiện đang trống! Hãy sang Tab **📥 1. Thu Thập Nguồn Vào** để quét video mới hoặc tải file lên.")
@@ -278,6 +284,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
         for idx, v in enumerate(target_vids):
             status_text.info(f"Đang xử lý ({idx+1}/{len(target_vids)}): {v['title'][:35]}…")
             try:
+                reset_video_status(v["id"])
                 manager.process_inbox_video(v, mode=target_mode)
             except Exception as e:
                 st.error(f"Lỗi video {v['platform_video_id']}: {e}")
@@ -297,6 +304,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
             raw_path = Path(v["raw_video_path"])
             vid_id = v["id"]
             is_checked = vid_id in selected_ids
+            is_failed = v.get("processed_status") == "failed"
 
             with st.container():
                 col_chk, col_plat, col_title, col_size, col_preview, col_btn_r, col_btn_d, col_btn_x = st.columns(
@@ -304,7 +312,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                 )
 
                 with col_chk:
-                    checked = st.checkbox("", value=is_checked, key=f"tbl_chk_{vid_id}")
+                    checked = st.checkbox(f"Chọn {vid_id}", value=is_checked, key=f"tbl_chk_{vid_id}", label_visibility="collapsed")
                     if checked != is_checked:
                         if checked:
                             st.session_state["selected_inbox_ids"].add(vid_id)
@@ -316,7 +324,11 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                     st.markdown(f"`{v['platform'].upper()}`")
 
                 with col_title:
-                    st.markdown(f"**{v['title'][:60]}**" if v['title'] else f"*Video_{v['platform_video_id']}*")
+                    if is_failed:
+                        st.markdown(f"**{v['title'][:55]}** :red[[🚨 LỖI]]" if v['title'] else f"*Video_{v['platform_video_id']}* :red[[🚨 LỖI]]")
+                        st.caption(f"🚨 Lý do: `{v.get('error_message') or 'Thất bại'}`")
+                    else:
+                        st.markdown(f"**{v['title'][:60]}**" if v['title'] else f"*Video_{v['platform_video_id']}*")
 
                 with col_size:
                     if raw_path.exists():
@@ -333,16 +345,26 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                             st.error("File không tồn tại")
 
                 with col_btn_r:
-                    if st.button("⚡ Remix", key=f"tbl_r_{vid_id}", help="Lách bản quyền 3-6s"):
-                        with st.spinner("Đang remix…"):
-                            manager.process_inbox_video(v, mode="remix")
-                            st.rerun()
+                    btn_r_lbl = "🔄 Thử lại" if is_failed else "⚡ Remix"
+                    btn_r_type = "primary" if is_failed else "secondary"
+                    if st.button(btn_r_lbl, key=f"tbl_r_{vid_id}", help="Lách bản quyền 3-6s", type=btn_r_type):
+                        with st.spinner("Đang xử lý…"):
+                            try:
+                                reset_video_status(vid_id)
+                                manager.process_inbox_video(v, mode="remix")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Lỗi: {e}")
 
                 with col_btn_d:
                     if st.button("🎙️ Dịch", key=f"tbl_d_{vid_id}", help="Dịch & Lồng tiếng AI"):
                         with st.spinner("Đang dịch…"):
-                            manager.process_inbox_video(v, mode="dub")
-                            st.rerun()
+                            try:
+                                reset_video_status(vid_id)
+                                manager.process_inbox_video(v, mode="dub")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Lỗi: {e}")
 
                 with col_btn_x:
                     if st.button("🗑️", key=f"tbl_x_{vid_id}", help="Bỏ qua video này"):
@@ -358,6 +380,7 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
             raw_path = Path(v["raw_video_path"])
             vid_id = v["id"]
             is_checked = vid_id in selected_ids
+            is_failed = v.get("processed_status") == "failed"
 
             with cols[idx % 3]:
                 with st.container(border=True):
@@ -379,17 +402,30 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                     else:
                         st.warning("File không tồn tại")
 
+                    if is_failed:
+                        st.error(f"🚨 Lỗi: {v.get('error_message') or 'Thất bại'}")
+
                     st.markdown(f"**{v['title'][:45]}**" if v['title'] else f"Video_{v['platform_video_id']}")
 
                     col_b1, col_b2, col_b3 = st.columns([1.5, 1.5, 1])
                     with col_b1:
-                        if st.button("⚡ Remix", key=f"grid_r_{vid_id}", use_container_width=True):
-                            manager.process_inbox_video(v, mode="remix")
-                            st.rerun()
+                        grid_r_lbl = "🔄 Thử lại" if is_failed else "⚡ Remix"
+                        grid_r_type = "primary" if is_failed else "secondary"
+                        if st.button(grid_r_lbl, key=f"grid_r_{vid_id}", type=grid_r_type, use_container_width=True):
+                            try:
+                                reset_video_status(vid_id)
+                                manager.process_inbox_video(v, mode="remix")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Lỗi: {e}")
                     with col_b2:
                         if st.button("🎙️ Dịch", key=f"grid_d_{vid_id}", type="primary", use_container_width=True):
-                            manager.process_inbox_video(v, mode="dub")
-                            st.rerun()
+                            try:
+                                reset_video_status(vid_id)
+                                manager.process_inbox_video(v, mode="dub")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Lỗi: {e}")
                     with col_b3:
                         if st.button("🗑️", key=f"grid_x_{vid_id}", use_container_width=True):
                             mark_as_skipped(vid_id)
@@ -404,7 +440,7 @@ def render_tab_publishing() -> None:
     st.subheader("🚀 3. Kho Video Xuất Bản (Ready to Upload)")
     st.caption("Toàn bộ video thành phẩm đạt chuẩn phát sóng CRF 18 (đã lồng tiếng Việt hoặc lách bản quyền + logo thương hiệu).")
 
-    col_btn1, col_btn2 = st.columns([2, 1])
+    col_btn1, col_btn2 = st.columns([2, 1], vertical_alignment="bottom")
     with col_btn1:
         if st.button("📂 Mở Thư Mục Chứa Video Thành Phẩm (Explorer)", use_container_width=True):
             READY_DIR.mkdir(parents=True, exist_ok=True)
@@ -413,7 +449,7 @@ def render_tab_publishing() -> None:
             else:
                 st.info(f"Đường dẫn: `{READY_DIR}`")
     with col_btn2:
-        filter_status = st.selectbox("Bộ lọc:", ["Tất cả thành phẩm", "Chưa đăng", "Đã đăng"])
+        filter_status = st.selectbox("Bộ lọc trạng thái:", ["Tất cả thành phẩm", "Chưa đăng", "Đã đăng"])
 
     include_up = filter_status != "Chưa đăng"
     ready_vids = get_ready_videos(include_uploaded=include_up)
@@ -421,11 +457,15 @@ def render_tab_publishing() -> None:
     if filter_status == "Đã đăng":
         ready_vids = [v for v in ready_vids if v.get("is_uploaded") == 1]
 
+    failed_vids = get_failed_videos()
+
     if not ready_vids:
-        st.info("Chưa có video thành phẩm nào trong kho. Hãy xử lý video từ Tab **🔍 2. Kiểm Tra & Phân Loại** trước!")
+        if failed_vids:
+            st.warning(f"⚠️ Đang có {len(failed_vids)} video bị lỗi khi xử lý! Vui lòng sang Tab **🔍 2. Kiểm Tra & Duyệt Xử Lý** để xem chi tiết lỗi và bấm '🔄 Thử lại'.")
+        st.info("Chưa có video thành phẩm nào trong kho. Hãy xử lý video từ Tab **🔍 2. Kiểm Tra & Duyệt Xử Lý** trước!")
         return
 
-    st.markdown(f"**Danh sách: {len(ready_vids)} video**")
+    st.markdown(f"**Danh sách: {len(ready_vids)} video thành phẩm đã sẵn sàng**")
 
     for v in ready_vids:
         out_path = Path(v["processed_video_path"]) if v.get("processed_video_path") else None
@@ -462,16 +502,28 @@ def render_tab_publishing() -> None:
                         mark_as_uploaded(v["id"], False)
                         st.rerun()
 
+                if out_path and out_path.exists() and sys.platform == "win32":
+                    if st.button("▶️ Mở xem trên máy (Player)", key=f"open_ext_{v['id']}", use_container_width=True):
+                        os.startfile(str(out_path))
+
                 if out_path and out_path.exists():
-                    with open(out_path, "rb") as f:
+                    try:
+                        with open(out_path, "rb") as f:
+                            file_bytes = f.read()
                         st.download_button(
                             "⬇️ Tải file về máy",
-                            data=f,
+                            data=file_bytes,
                             file_name=out_path.name,
                             mime="video/mp4",
                             key=f"dl_btn_{v['id']}",
                             use_container_width=True,
                         )
+                    except Exception as e:
+                        st.caption(f"Không thể đọc file: {e}")
+
+                if st.button("🔄 Đưa về Inbox (Xử lý lại)", key=f"re_inbox_{v['id']}", use_container_width=True):
+                    reset_video_status(v["id"])
+                    st.rerun()
 
                 if st.button("🗑️ Xóa bản ghi", key=f"del_pub_{v['id']}", use_container_width=True):
                     delete_downloaded_video(v["id"])

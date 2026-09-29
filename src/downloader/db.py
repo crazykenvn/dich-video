@@ -225,17 +225,37 @@ def get_pending_videos() -> list[dict[str, Any]]:
 
 
 def get_inbox_videos() -> list[dict[str, Any]]:
-    """Lấy danh sách video đang ở Hộp thư Chờ duyệt (chưa xử lý)."""
+    """Lấy danh sách video đang ở Hộp thư Chờ duyệt (chưa xử lý hoặc bị lỗi)."""
     init_db()
     with get_connection() as conn:
         rows = conn.execute(
             """
             SELECT * FROM downloaded_videos
-            WHERE processed_status IN ('inbox', 'pending', 'downloaded')
+            WHERE processed_status IN ('inbox', 'pending', 'downloaded', 'failed')
             ORDER BY id DESC
             """
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_failed_videos() -> list[dict[str, Any]]:
+    """Lấy danh sách các video bị lỗi trong quá trình xử lý."""
+    init_db()
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM downloaded_videos WHERE processed_status = 'failed' ORDER BY id DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def reset_video_status(video_id: int, new_status: str = "inbox") -> None:
+    """Khôi phục trạng thái video về inbox để có thể xử lý lại."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE downloaded_videos SET processed_status = ?, error_message = NULL WHERE id = ?",
+            (new_status, video_id),
+        )
+        conn.commit()
 
 
 def get_ready_videos(include_uploaded: bool = True, limit: int = 100) -> list[dict[str, Any]]:
@@ -277,4 +297,5 @@ def delete_downloaded_video(video_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM downloaded_videos WHERE id = ?", (video_id,))
         conn.commit()
+
 
