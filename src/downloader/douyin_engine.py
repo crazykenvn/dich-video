@@ -77,7 +77,7 @@ class DouyinDownloader:
         return self._get_videos_via_requests(sec_uid, max_count=max_count)
 
     def _get_videos_via_browser(self, user_url: str, max_count: int = 15) -> list[dict[str, Any]]:
-        """Dùng Headless Browser (Edge/Chrome) mở trang và bắt gói tin /aweme/post/."""
+        """Dùng Headless Browser (Edge/Chrome) với cơ chế Stealth để vượt qua WAF và bắt gói tin /aweme/post/."""
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
@@ -87,7 +87,7 @@ class DouyinDownloader:
 
         def handle_response(response: Any) -> None:
             url = response.url
-            if "/aweme/v1/web/aweme/post/" in url:
+            if "aweme/post" in url and response.status == 200:
                 try:
                     data = response.json()
                     aweme_list = data.get("aweme_list", [])
@@ -95,35 +95,45 @@ class DouyinDownloader:
                         vid_id = item.get("aweme_id")
                         desc = item.get("desc") or f"Douyin_{vid_id}"
                         video_info = item.get("video", {})
-                        play_addr = video_info.get("play_addr", {})
-                        url_list = play_addr.get("url_list", [])
+                        # Ưu tiên luồng h264 chất lượng cao không watermark
+                        url_list = (
+                            video_info.get("play_addr_h264", {}).get("url_list")
+                            or video_info.get("play_addr", {}).get("url_list")
+                            or []
+                        )
                         clean_url = None
                         if url_list:
                             clean_url = url_list[0].replace("playwm", "play")
 
                         if vid_id and clean_url:
-                            captured_videos.append(
-                                {
-                                    "id": str(vid_id),
-                                    "title": desc,
-                                    "url": f"https://www.douyin.com/video/{vid_id}",
-                                    "play_url": clean_url,
-                                    "cover": video_info.get("cover", {}).get("url_list", [""])[0],
-                                    "duration": item.get("duration", 0) / 1000.0,
-                                }
-                            )
+                            if not any(v["id"] == str(vid_id) for v in captured_videos):
+                                captured_videos.append(
+                                    {
+                                        "id": str(vid_id),
+                                        "title": desc.strip().replace("\n", " "),
+                                        "url": f"https://www.douyin.com/video/{vid_id}",
+                                        "play_url": clean_url,
+                                        "cover": video_info.get("cover", {}).get("url_list", [""])[0],
+                                        "duration": item.get("duration", 0) / 1000.0,
+                                    }
+                                )
                 except Exception:
                     pass
 
         try:
             with sync_playwright() as p:
                 browser = None
+                launch_args = [
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-infobars",
+                ]
                 for channel in ["msedge", "chrome", None]:
                     try:
                         if channel:
-                            browser = p.chromium.launch(channel=channel, headless=True)
+                            browser = p.chromium.launch(channel=channel, headless=True, args=launch_args)
                         else:
-                            browser = p.chromium.launch(headless=True)
+                            browser = p.chromium.launch(headless=True, args=launch_args)
                         break
                     except Exception:
                         continue
@@ -136,22 +146,50 @@ class DouyinDownloader:
                     viewport={"width": 1280, "height": 800},
                     locale="zh-CN",
                 )
+                # Stealth injection để vượt qua kiểm tra webdriver của Douyin
+                context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+
                 page = context.new_page()
                 page.on("response", handle_response)
 
-                page.goto(user_url, wait_until="domcontentloaded", timeout=25000)
+                try:
+                    page.goto(user_url, wait_until="domcontentloaded", timeout=25000)
+                except Exception:
+                    pass
 
-                # Chờ tối đa 8 giây để nhận API phản hồi
+                # Chờ tải ban đầu và cuộn trang để kích hoạt API load video
+                page.wait_for_timeout(2000)
                 for _ in range(8):
-                    if captured_videos:
+                    if len(captured_videos) >= max_count:
                         break
-                    time.sleep(1)
+                    page.mouse.wheel(0, 700)
+                    page.wait_for_timeout(1000)
 
+                # Fallback từ DOM nếu gói tin API bị trôi
                 if not captured_videos:
-                    page.mouse.wheel(0, 600)
-                    time.sleep(2)
+                    try:
+                        dom_links = page.evaluate(
+                            "() => Array.from(document.querySelectorAll('a[href*=\"/video/\"]')).map(a => ({href: a.href, text: a.innerText}))"
+                        )
+                        for item in dom_links:
+                            m = re.search(r"/video/(\d+)", item.get("href", ""))
+                            if m:
+                                vid_id = m.group(1)
+                                if not any(v["id"] == vid_id for v in captured_videos):
+                                    captured_videos.append(
+                                        {
+                                            "id": str(vid_id),
+                                            "title": (item.get("text", "") or f"Douyin_{vid_id}").strip().replace("\n", " ")[:80],
+                                            "url": f"https://www.douyin.com/video/{vid_id}",
+                                            "play_url": None,
+                                            "cover": "",
+                                            "duration": 0.0,
+                                        }
+                                    )
+                    except Exception:
+                        pass
 
-                # Lưu cookies để tái sử dụng
+                # Lưu cookies phiên duyệt để dùng cho requests
                 try:
                     cookies = context.cookies()
                     cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])

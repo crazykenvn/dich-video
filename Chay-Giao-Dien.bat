@@ -26,7 +26,7 @@ if not exist ".\.venv\Scripts\python.exe" (
 if not exist ".\.venv\Scripts\streamlit.exe" (
     echo [!] Chua tim thay Streamlit trong .venv.
     echo [*] Dang tu dong cai dat Streamlit va cac goi phu thuoc...
-    .\.venv\Scripts\pip install streamlit pandas requests yt-dlp deep-translator srt python-dotenv -i https://mirrors.aliyun.com/pypi/simple/
+    .\.venv\Scripts\pip install streamlit pandas requests yt-dlp playwright deep-translator srt python-dotenv -i https://mirrors.aliyun.com/pypi/simple/
 )
 
 echo Dang khoi dong may chu giao dien Streamlit...
