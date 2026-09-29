@@ -12,7 +12,13 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from .lab import LAB_OUTPUT_DIR, LAB_PRESETS, generate_single_variant
+from .lab import (
+    LAB_OUTPUT_DIR,
+    LAB_PRESETS,
+    build_custom_mix_filter,
+    generate_custom_variant,
+    generate_single_variant,
+)
 
 from ..config import (
     EDGE_VOICE_ALTERNATES,
@@ -1403,13 +1409,13 @@ def render_tab_lab(manager: DownloadManager) -> None:
 
     st.markdown("---")
 
-    # 2. CHỌN CÁC PHƯƠNG PHÁP XỬ LÝ
-    st.markdown("### 2. Chọn Các Phương Pháp Xử Lý Muốn Thử Nghiệm")
+    # 2. CHỌN CÁC PHƯƠNG PHÁP & CÔNG THỨC PHỐI HỢP
+    st.markdown("### 2. Chọn Các Phương Pháp & Công Thức Phối Hợp")
     st.caption("Tick chọn các kỹ thuật bạn muốn so sánh. Hệ thống sẽ sinh riêng từng video cho mỗi phương pháp.")
 
     c_btn1, c_btn2, c_btn3 = st.columns([1.5, 1.5, 3])
     with c_btn1:
-        if st.button("⭐ Chọn các bản khuyên dùng", key="lab_btn_rec", use_container_width=True):
+        if st.button("⭐ Chọn các Combo khuyên dùng", key="lab_btn_rec", use_container_width=True):
             for pid, pdata in LAB_PRESETS.items():
                 st.session_state[f"lab_chk_{pid}"] = pdata["recommended"]
             st.rerun()
@@ -1424,21 +1430,114 @@ def render_tab_lab(manager: DownloadManager) -> None:
                 st.session_state[f"lab_chk_{pid}"] = False
             st.rerun()
 
+    tab_combos, tab_singles = st.tabs([
+        "🔥 Công Thức Phối Hợp Hoàng Kim (Golden Combos)",
+        "🔬 Kỹ Thuật Đơn Lẻ (Để Đối Chứng & Thử Nghiệm)",
+    ])
+
     selected_presets = []
-    cols_preset = st.columns(2)
-    for idx, (pid, pdata) in enumerate(LAB_PRESETS.items()):
-        with cols_preset[idx % 2]:
-            rec_badge = " :green[⭐ Khuyên dùng]" if pdata["recommended"] else ""
-            default_val = pdata["recommended"]
-            is_checked = st.checkbox(
-                f"{pdata['name']}{rec_badge}",
-                value=st.session_state.get(f"lab_chk_{pid}", default_val),
-                key=f"lab_chk_{pid}",
-            )
-            if is_checked:
-                selected_presets.append(pid)
-            st.caption(f":blue[[{pdata['tag']}]] • {pdata['description']}")
-            st.write("")
+
+    with tab_combos:
+        st.caption("Các bộ phối hợp đa tầng được tối ưu hóa theo thể loại video (đánh trúng cả 5 tầng kiểm duyệt của bot mà vẫn đẹp mắt):")
+        combo_items = [(pid, pdata) for pid, pdata in LAB_PRESETS.items() if pdata["category"] == "Công thức phối hợp"]
+        cols_c = st.columns(2)
+        for idx, (pid, pdata) in enumerate(combo_items):
+            with cols_c[idx % 2]:
+                rec_badge = " :green[⭐ Khuyên dùng]" if pdata["recommended"] else ""
+                default_val = pdata["recommended"]
+                is_checked = st.checkbox(
+                    f"{pdata['name']}{rec_badge}",
+                    value=st.session_state.get(f"lab_chk_{pid}", default_val),
+                    key=f"lab_chk_{pid}",
+                )
+                if is_checked:
+                    selected_presets.append(pid)
+                st.caption(f":blue[[{pdata['tag']}]] • {pdata['description']}")
+                st.write("")
+
+    with tab_singles:
+        st.caption("Từng kỹ thuật can thiệp riêng rẽ vào một khía cạnh (Grain, Scanlines, Mesh, RGB Shift, Unsharp,...):")
+        single_items = [(pid, pdata) for pid, pdata in LAB_PRESETS.items() if pdata["category"] != "Công thức phối hợp"]
+        cols_s = st.columns(2)
+        for idx, (pid, pdata) in enumerate(single_items):
+            with cols_s[idx % 2]:
+                rec_badge = " :green[⭐ Khuyên dùng]" if pdata["recommended"] else ""
+                default_val = pdata["recommended"]
+                is_checked = st.checkbox(
+                    f"{pdata['name']}{rec_badge}",
+                    value=st.session_state.get(f"lab_chk_{pid}", default_val),
+                    key=f"lab_chk_{pid}",
+                )
+                if is_checked:
+                    selected_presets.append(pid)
+                st.caption(f":blue[[{pdata['tag']}]] • {pdata['description']}")
+                st.write("")
+
+    # Studio Tự Thiết Kế Bản Phối
+    with st.expander("🎛️ Tự Thiết Kế Bản Phối Riêng (Custom Combiner Studio)", expanded=False):
+        st.caption("Tự do lựa chọn và tùy biến từng mắt xích theo công thức riêng của bạn. Hệ thống sẽ tự động ghép chuỗi theo đúng thứ tự tối ưu.")
+        c_mix1, c_mix2 = st.columns(2)
+        with c_mix1:
+            m_crop = st.checkbox("📐 1. Micro-Crop 1.5% + Phóng to Lanczos (Trượt pha pixel)", value=True, key="cm_crop")
+            m_eq = st.checkbox("🎨 2. Cân bằng tương phản & bão hòa màu nịnh mắt (Contrast 1.03, Sat 1.04)", value=True, key="cm_eq")
+            m_rgb = st.selectbox("🌈 3. Tách viền quang sai màu RGB (Chromatic Aberration):", ["Không dùng", "Lệch 1px (Nhẹ)", "Lệch 2px (Rõ rệt)"], index=1, key="cm_rgb")
+            m_grid = st.selectbox("🕸️ 4. Lớp lưới rỗ bề mặt (Structure Mesh / Scanlines):", ["Không dùng", "Lưới mắt cáo Mesh 3x3 siêu mờ (7%)", "Lưới mắt cáo Mesh 4x4 (12%)", "Lưới sọc kẻ CRT 3px (14%)"], index=1, key="cm_grid")
+        with c_mix2:
+            m_grain = st.selectbox("🎞️ 5. Lớp phủ hạt Film Grain động:", ["Không dùng", "Hạt film mịn nhẹ (Luma 6)", "Hạt điện ảnh 35mm (Luma 12)", "Hạt đậm phá nét (Luma 18)"], index=1, key="cm_grain")
+            m_unsharp = st.checkbox("⚡ 6. Gai nét viền (Unsharp 1.2x làm sắc hạt và viền)", value=False, key="cm_unsharp")
+            m_vignette = st.checkbox("🌑 7. Quầng tối 4 góc (Vignette điện ảnh)", value=False, key="cm_vignette")
+            m_speed = st.checkbox("⏩ 8. Biến thiên tốc độ vi mô 1.025x (Lệch nhịp khung hình)", value=False, key="cm_speed")
+
+        grid_map = {
+            "Không dùng": "none",
+            "Lưới mắt cáo Mesh 3x3 siêu mờ (7%)": "mesh_3x3_subtle",
+            "Lưới mắt cáo Mesh 4x4 (12%)": "mesh_4x4_medium",
+            "Lưới sọc kẻ CRT 3px (14%)": "scanlines_3px",
+        }
+        rgb_map = {"Không dùng": 0, "Lệch 1px (Nhẹ)": 1, "Lệch 2px (Rõ rệt)": 2}
+        grain_map = {
+            "Không dùng": "none",
+            "Hạt film mịn nhẹ (Luma 6)": "subtle",
+            "Hạt điện ảnh 35mm (Luma 12)": "cinema",
+            "Hạt đậm phá nét (Luma 18)": "heavy",
+        }
+
+        btn_run_custom = st.button("🧪 Sinh Thử Bản Phối Tự Chọn Này", key="btn_run_custom_mix", use_container_width=True)
+        if btn_run_custom:
+            if not target_video_path:
+                st.error("Vui lòng chọn video nguồn ở Bước 1 trước!")
+            else:
+                session_folder = LAB_OUTPUT_DIR / f"{target_video_path.stem}_{int(time.time())}"
+                session_folder.mkdir(parents=True, exist_ok=True)
+                out_custom = session_folder / "variant_custom_mix.mp4"
+                custom_cfg = {
+                    "crop_lanczos": m_crop,
+                    "color_eq": m_eq,
+                    "rgb_shift": rgb_map[m_rgb],
+                    "grid_mode": grid_map[m_grid],
+                    "grain_mode": grain_map[m_grain],
+                    "unsharp": m_unsharp,
+                    "vignette": m_vignette,
+                    "speed_warp": m_speed,
+                }
+                with st.spinner("Đang render bản phối tùy biến của bạn…"):
+                    res = generate_custom_variant(
+                        video_path=target_video_path,
+                        output_path=out_custom,
+                        custom_cfg=custom_cfg,
+                        preview_duration=15.0,
+                        anti_audio=True,
+                    )
+                if res.get("success"):
+                    cur_results = st.session_state.get("lab_results", [])
+                    cur_results.insert(0, res)
+                    st.session_state["lab_results"] = cur_results
+                    st.session_state["lab_session_folder"] = str(session_folder)
+                    st.session_state["lab_original_title"] = target_video_title
+                    st.success("🎉 Đã sinh thành công Bản Phối Tùy Biến! Xem ở Thư Viện So Sánh bên dưới.")
+                    st.rerun()
+                else:
+                    st.error(f"Lỗi: {res.get('error')}")
 
     st.markdown("---")
 
@@ -1465,7 +1564,7 @@ def render_tab_lab(manager: DownloadManager) -> None:
         )
 
     btn_start_lab = st.button(
-        f"🚀 BẮT ĐẦU SINH {len(selected_presets)} BIẾN THỂ THỬ NGHIỆM",
+        f"🚀 BẮT ĐẦU SINH {len(selected_presets)} BIẾN THỂ ĐÃ CHỌN",
         type="primary",
         disabled=(not target_video_path or len(selected_presets) == 0),
         use_container_width=True,
