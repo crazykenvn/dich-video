@@ -539,7 +539,6 @@ def render_sub_placement_dialog(v: dict[str, Any], manager: DownloadManager) -> 
             try:
                 reset_video_status(vid_id)
                 manager.process_inbox_video(v, mode="dub", settings=custom_cfg)
-                st.session_state[f"sel_vid_{vid_id}"] = False
                 st.session_state["show_sub_dialog_for"] = None
                 st.success("🎉 Đã bắt đầu dịch video với toạ độ đè sub tùy chỉnh!")
                 st.rerun()
@@ -769,7 +768,6 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
     if btn_bulk_del:
         for v in selected_vids:
             mark_as_skipped(v["id"])
-            st.session_state[f"sel_vid_{v['id']}"] = False
         st.success(f"Đã bỏ qua {len(selected_vids)} video.")
         st.rerun()
 
@@ -796,9 +794,6 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
             except Exception as e:
                 st.error(f"Lỗi video {v['platform_video_id']}: {e}")
             progress_bar.progress((idx + 1) / len(target_vids))
-
-        for v in target_vids:
-            st.session_state[f"sel_vid_{v['id']}"] = False
 
         status_text.success(f"🎉 Đã hoàn tất xử lý {success_count}/{len(target_vids)} video! Video đã chuyển sang Tab **🚀 3. Kho Sẵn Sàng Upload**.")
         time.sleep(2)
@@ -854,7 +849,6 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                             try:
                                 reset_video_status(vid_id)
                                 manager.process_inbox_video(v, mode="remix")
-                                st.session_state[f"sel_vid_{vid_id}"] = False
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Lỗi: {e}")
@@ -867,7 +861,6 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                 with col_btn_x:
                     if st.button("🗑️", key=f"tbl_x_{vid_id}", help="Bỏ qua video này"):
                         mark_as_skipped(vid_id)
-                        st.session_state[f"sel_vid_{vid_id}"] = False
                         st.rerun()
 
             st.divider()
@@ -907,7 +900,6 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                             try:
                                 reset_video_status(vid_id)
                                 manager.process_inbox_video(v, mode="remix")
-                                st.session_state[f"sel_vid_{vid_id}"] = False
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Lỗi: {e}")
@@ -918,7 +910,6 @@ def render_tab_triage(manager: DownloadManager, pipeline: Any | None = None) -> 
                     with col_b3:
                         if st.button("🗑️", key=f"grid_x_{vid_id}", use_container_width=True):
                             mark_as_skipped(vid_id)
-                            st.session_state[f"sel_vid_{vid_id}"] = False
                             st.rerun()
 
 
