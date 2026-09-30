@@ -67,6 +67,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE downloaded_videos ADD COLUMN uploaded_at TEXT")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE downloaded_videos ADD COLUMN platform_publish_status TEXT DEFAULT '{}'")
+        except Exception:
+            pass
         conn.commit()
 
 
@@ -297,5 +301,57 @@ def delete_downloaded_video(video_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM downloaded_videos WHERE id = ?", (video_id,))
         conn.commit()
+
+
+def get_platform_publish_status(video_id: int) -> dict[str, Any]:
+    """Lấy trạng thái phân phối đa nền tảng (TikTok, Reels, Shorts) của video."""
+    init_db()
+    with get_connection() as conn:
+        row = conn.execute("SELECT platform_publish_status FROM downloaded_videos WHERE id = ?", (video_id,)).fetchone()
+        if not row:
+            return {}
+        raw = row["platform_publish_status"]
+        if not raw:
+            return {}
+        try:
+            import json
+            return json.loads(raw)
+        except Exception:
+            return {}
+
+
+def toggle_platform_publish_status(video_id: int, platform: str, is_published: bool | None = None) -> dict[str, Any]:
+    """Bật / tắt trạng thái đã đăng tải lên một nền tảng cụ thể (tiktok, reels, shorts)."""
+    import json
+    init_db()
+    current = get_platform_publish_status(video_id)
+    platform_key = platform.lower()
+    
+    if is_published is None:
+        curr_state = current.get(platform_key, {}).get("is_published", False)
+        new_state = not curr_state
+    else:
+        new_state = is_published
+
+    now = datetime.now().isoformat()
+    current[platform_key] = {
+        "is_published": new_state,
+        "updated_at": now if new_state else None,
+    }
+    
+    # Đồng bộ với is_uploaded cũ nếu có bất kỳ nền tảng nào đã đăng
+    any_published = any(v.get("is_published", False) for v in current.values())
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE downloaded_videos 
+            SET platform_publish_status = ?, is_uploaded = ?, uploaded_at = ?
+            WHERE id = ?
+            """,
+            (json.dumps(current, ensure_ascii=False), int(any_published), now if any_published else None, video_id),
+        )
+        conn.commit()
+    return current
 
 
