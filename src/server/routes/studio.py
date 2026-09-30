@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 
 from ...config import OUTPUT_DIR
 from ...downloader.db import get_connection, init_db
@@ -26,12 +28,30 @@ from ...subtitles import read_srt, write_srt
 from ...transcribe import Segment, Transcriber
 from ...translate import Translator
 from ...tts import build_dub_track
-from ..models import AutoTranslateRequest, RenderConfigRequest, SaveSubtitlesRequest
+from ..models import (
+    AutoTranslateRequest,
+    GenerateDubAudioRequest,
+    RenderConfigRequest,
+    SaveSubtitlesRequest,
+)
 from .videos import resolve_video_path
 
 router = APIRouter(prefix="/studio", tags=["Studio & Editor"])
 
 ACTIVE_TRANSLATIONS: dict[str, dict[str, Any]] = {}
+
+
+def find_dub_wav(video_path: Path) -> Path | None:
+    """Tìm file audio lồng tiếng AI tiếng Việt của video (nếu đã tạo)."""
+    candidates = [
+        video_path.parent / f"{video_path.stem}_dub_vi.wav",
+        OUTPUT_DIR / "temp" / f"tts_{video_path.stem}" / f"{video_path.stem}_dub_vi.wav",
+        OUTPUT_DIR / "audio" / f"{video_path.stem}_dub_vi.wav",
+    ]
+    for c in candidates:
+        if c.exists() and c.is_file() and c.stat().st_size > 1000:
+            return c
+    return None
 
 
 @router.get("/presets")
@@ -167,15 +187,24 @@ def get_video_subtitles(video_path: str = Query(..., description="Đường dẫ
     try:
         target_p = resolve_video_path(video_path)
     except Exception:
-        return {"has_sub": False, "segments": [], "meta": None}
+        return {"has_sub": False, "segments": [], "meta": None, "has_dub_audio": False, "dub_audio_url": None}
 
     if not target_p.exists() or not target_p.is_file():
-        return {"has_sub": False, "segments": [], "meta": None}
+        return {"has_sub": False, "segments": [], "meta": None, "has_dub_audio": False, "dub_audio_url": None}
 
     stem = target_p.stem
     parent = target_p.parent
     sub_dir = OUTPUT_DIR / "subtitles"
     sub_dir.mkdir(parents=True, exist_ok=True)
+
+    dub_wav = find_dub_wav(target_p)
+    has_dub = dub_wav is not None and dub_wav.exists()
+    dub_info = {
+        "has_dub_audio": has_dub,
+        "dub_audio_url": f"/api/studio/dub-audio?video_path={urllib.parse.quote(str(target_p))}" if has_dub else None,
+        "dub_audio_filename": dub_wav.name if has_dub else None,
+        "dub_audio_size": dub_wav.stat().st_size if has_dub else 0,
+    }
 
     # 1. Kiểm tra file metadata JSON đã lưu dự án
     meta_json = sub_dir / f"{stem}_meta.json"
@@ -195,6 +224,7 @@ def get_video_subtitles(video_path: str = Query(..., description="Đường dẫ
                     "voice": data.get("voice", "vi-VN-HoaiMyNeural"),
                     "is_orig_muted": data.get("is_orig_muted", False),
                 },
+                **dub_info,
             }
         except Exception as e:
             print(f"[studio subtitles] Lỗi đọc meta json: {e}")
@@ -215,7 +245,7 @@ def get_video_subtitles(video_path: str = Query(..., description="Đường dẫ
             break
 
     if not found_srt:
-        return {"has_sub": False, "segments": [], "meta": None}
+        return {"has_sub": False, "segments": [], "meta": None, **dub_info}
 
     try:
         segs = read_srt(found_srt)
@@ -232,10 +262,112 @@ def get_video_subtitles(video_path: str = Query(..., description="Đường dẫ
             "has_sub": len(formatted) > 0,
             "segments": formatted,
             "meta": None,
+            **dub_info,
         }
     except Exception as e:
         print(f"[studio subtitles] Lỗi đọc srt: {e}")
-        return {"has_sub": False, "segments": [], "meta": None}
+        return {"has_sub": False, "segments": [], "meta": None, **dub_info}
+
+
+@router.get("/dub-audio")
+def get_dub_audio(video_path: str = Query(..., description="Đường dẫn file video")):
+    """Cung cấp luồng phát audio lồng tiếng AI (WAV) cho video."""
+    try:
+        target_p = resolve_video_path(video_path)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Không tìm thấy file video")
+
+    dub_wav = find_dub_wav(target_p)
+    if not dub_wav or not dub_wav.exists():
+        raise HTTPException(status_code=404, detail="Chưa có file audio lồng tiếng cho video này")
+
+    return FileResponse(str(dub_wav), media_type="audio/wav")
+
+
+@router.post("/generate-dub-audio")
+def generate_dub_audio_endpoint(req: GenerateDubAudioRequest) -> dict[str, Any]:
+    """Tạo lại hoặc cập nhật audio lồng tiếng AI tiếng Việt từ phụ đề."""
+    try:
+        target_p = resolve_video_path(req.video_path)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy video: {req.video_path}")
+
+    stem = target_p.stem
+    settings = load_settings()
+
+    # Chuyển segments thành Segment objects
+    seg_objs: list[Segment] = []
+    if req.segments:
+        seg_objs = [
+            Segment(
+                index=s.id or idx,
+                start=float(s.start),
+                end=float(s.end),
+                text=s.text,
+                translated=s.text,
+            )
+            for idx, s in enumerate(req.segments, start=1)
+        ]
+    else:
+        sub_dir = OUTPUT_DIR / "subtitles"
+        meta_json = sub_dir / f"{stem}_meta.json"
+        if meta_json.exists():
+            try:
+                data = json.loads(meta_json.read_text(encoding="utf-8"))
+                seg_objs = [
+                    Segment(
+                        index=s.get("id", idx),
+                        start=float(s.get("start", 0)),
+                        end=float(s.get("end", 0)),
+                        text=s.get("text", ""),
+                        translated=s.get("text", ""),
+                    )
+                    for idx, s in enumerate(data.get("segments", []), start=1)
+                ]
+            except Exception:
+                pass
+
+    if not seg_objs:
+        raise HTTPException(status_code=400, detail="Không có câu phụ đề nào để tạo giọng đọc")
+
+    dub_wav = target_p.parent / f"{stem}_dub_vi.wav"
+    tts_work_dir = OUTPUT_DIR / "temp" / f"tts_{stem}"
+    tts_work_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        total_dur = duration_seconds(target_p)
+        build_dub_track(
+            segments=seg_objs,
+            total_duration=total_dur,
+            work_dir=tts_work_dir,
+            output_wav=dub_wav,
+            target_lang="vi",
+            voice=req.voice or "vi-VN-HoaiMyNeural",
+            fit_timing=settings.get("fit_timing", True),
+            resolve_overlap=settings.get("resolve_overlap", True),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi tổng hợp giọng đọc AI: {e}")
+
+    # Cập nhật voice vào file meta.json nếu có
+    sub_dir = OUTPUT_DIR / "subtitles"
+    meta_json = sub_dir / f"{stem}_meta.json"
+    if meta_json.exists():
+        try:
+            m_data = json.loads(meta_json.read_text(encoding="utf-8"))
+            m_data["voice"] = req.voice
+            m_data["updated_at"] = datetime.now().isoformat()
+            meta_json.write_text(json.dumps(m_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "message": f"Đã tổng hợp thành công giọng đọc lồng tiếng AI ({req.voice})!",
+        "dub_audio_url": f"/api/studio/dub-audio?video_path={urllib.parse.quote(str(target_p))}",
+        "dub_audio_filename": dub_wav.name,
+        "dub_audio_size": dub_wav.stat().st_size,
+    }
 
 
 @router.post("/save-subtitles")
@@ -452,6 +584,9 @@ def _do_auto_translate(req: AutoTranslateRequest) -> dict[str, Any]:
         )
         write_srt(translated_segments, sub_dir / f"{target_p.stem}_vi.srt", use_translated=True)
 
+        has_dub = dub_wav.exists() and dub_wav.stat().st_size > 1000
+        dub_url = f"/api/studio/dub-audio?video_path={urllib.parse.quote(str(target_p))}" if has_dub else None
+
         ACTIVE_TRANSLATIONS[video_key] = {
             "status": "completed",
             "step": 4,
@@ -459,7 +594,9 @@ def _do_auto_translate(req: AutoTranslateRequest) -> dict[str, Any]:
             "message": f"Dịch & lồng tiếng thành công {len(formatted_segments)} đoạn hội thoại!",
             "segments": formatted_segments,
             "detected_language": detected_lang,
-            "dub_audio": str(dub_wav) if dub_wav.exists() else None,
+            "dub_audio": str(dub_wav) if has_dub else None,
+            "dub_audio_url": dub_url,
+            "has_dub_audio": has_dub,
         }
 
         return {
@@ -469,7 +606,9 @@ def _do_auto_translate(req: AutoTranslateRequest) -> dict[str, Any]:
             "segments": formatted_segments,
             "count": len(formatted_segments),
             "srt_path": str(srt_path),
-            "dub_audio": str(dub_wav) if dub_wav.exists() else None,
+            "dub_audio": str(dub_wav) if has_dub else None,
+            "dub_audio_url": dub_url,
+            "has_dub_audio": has_dub,
         }
     except Exception as e:
         ACTIVE_TRANSLATIONS[video_key] = {

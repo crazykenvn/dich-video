@@ -46,6 +46,17 @@ export default function StudioScreen({
   const [selectedVoice, setSelectedVoice] = useState('vi-VN-HoaiMyNeural');
   const [activeInspectorTab, setActiveInspectorTab] = useState('tab-style'); // 'tab-style' | 'tab-voice' | 'tab-anti'
 
+  // Dub Audio AI state
+  const [hasDubAudio, setHasDubAudio] = useState(false);
+  const [dubAudioUrl, setDubAudioUrl] = useState(null);
+  const [dubAudioFilename, setDubAudioFilename] = useState(null);
+  const [dubAudioSize, setDubAudioSize] = useState(0);
+  const [isDubAudioMuted, setIsDubAudioMuted] = useState(false);
+  const [dubAudioVolume, setDubAudioVolume] = useState(1.0);
+  const [isGeneratingDub, setIsGeneratingDub] = useState(false);
+  const [audioKey, setAudioKey] = useState(Date.now());
+  const dubAudioRef = useRef(null);
+
   // Lab Anti-detect Combo & Branding Watermark
   const [activeCombo, setActiveCombo] = useState('stealth'); // 'stealth' | 'cinema' | 'crt' | 'fortress'
   const [pitchShift, setPitchShift] = useState(true);
@@ -109,10 +120,25 @@ export default function StudioScreen({
           if (res.meta.voice) setSelectedVoice(res.meta.voice);
           if (res.meta.is_orig_muted !== undefined) setIsOrigMuted(res.meta.is_orig_muted);
         }
+        if (res?.has_dub_audio && res.dub_audio_url) {
+          setHasDubAudio(true);
+          setDubAudioUrl(res.dub_audio_url);
+          setDubAudioFilename(res.dub_audio_filename || `${selectedVideo.filename.replace(/\.[^/.]+$/, "")}_dub_vi.wav`);
+          setDubAudioSize(res.dub_audio_size || 0);
+        } else {
+          setHasDubAudio(false);
+          setDubAudioUrl(null);
+          setDubAudioFilename(null);
+          setDubAudioSize(0);
+        }
       });
       if (videoRef.current) {
         videoRef.current.currentTime = 0;
         videoRef.current.pause();
+      }
+      if (dubAudioRef.current) {
+        dubAudioRef.current.currentTime = 0;
+        dubAudioRef.current.pause();
       }
       setIsPlaying(false);
       setCurrentSeconds(0);
@@ -120,6 +146,10 @@ export default function StudioScreen({
       // Khi không có video: đưa toàn bộ trạng thái về trắng/trống hoàn toàn
       setSegments([]);
       setActiveSegmentId(null);
+      setHasDubAudio(false);
+      setDubAudioUrl(null);
+      setDubAudioFilename(null);
+      setDubAudioSize(0);
       setTimelineFrames([]);
       setPreviewFrameUrl(null);
       setVideoDims('');
@@ -209,13 +239,20 @@ export default function StudioScreen({
     });
   };
 
-  // Video playback & seeking controls
+  // Video & Dub Audio playback & seeking controls
   const togglePlayPause = () => {
     if (!videoRef.current) return;
     if (videoRef.current.paused) {
       videoRef.current.play().catch(err => console.warn("Video play error:", err));
+      if (dubAudioRef.current && hasDubAudio && !isDubAudioMuted) {
+        dubAudioRef.current.currentTime = videoRef.current.currentTime;
+        dubAudioRef.current.play().catch(err => console.warn("Dub audio play error:", err));
+      }
     } else {
       videoRef.current.pause();
+      if (dubAudioRef.current) {
+        dubAudioRef.current.pause();
+      }
     }
   };
 
@@ -224,6 +261,9 @@ export default function StudioScreen({
     setCurrentSeconds(s);
     if (videoRef.current) {
       videoRef.current.currentTime = s;
+    }
+    if (dubAudioRef.current && hasDubAudio) {
+      dubAudioRef.current.currentTime = s;
     }
   };
 
@@ -234,6 +274,69 @@ export default function StudioScreen({
       videoRef.current.muted = nextMuted;
     }
     showToast(nextMuted ? '🔇 Tiếng gốc: Đã Tắt (Mute)' : '🔊 Tiếng gốc: Đã Bật', 'info');
+  };
+
+  const toggleDubMute = () => {
+    const next = !isDubAudioMuted;
+    setIsDubAudioMuted(next);
+    if (dubAudioRef.current) {
+      dubAudioRef.current.muted = next;
+    }
+    showToast(next ? '🔇 Lồng tiếng AI: Đã Tắt' : '🎙️ Lồng tiếng AI: Đã Bật', 'info');
+  };
+
+  // Đồng bộ âm lượng tiếng gốc theo thanh gạt Audio Ducking khi có lồng tiếng
+  useEffect(() => {
+    if (videoRef.current) {
+      if (isOrigMuted) {
+        videoRef.current.muted = true;
+      } else {
+        videoRef.current.muted = false;
+        videoRef.current.volume = hasDubAudio && !isDubAudioMuted ? Math.min(1.0, Math.max(0.0, audioDucking / 100)) : 1.0;
+      }
+    }
+  }, [isOrigMuted, audioDucking, hasDubAudio, isDubAudioMuted]);
+
+  // Đồng bộ âm lượng lồng tiếng AI
+  useEffect(() => {
+    if (dubAudioRef.current) {
+      dubAudioRef.current.volume = isDubAudioMuted ? 0 : dubAudioVolume;
+    }
+  }, [isDubAudioMuted, dubAudioVolume]);
+
+  const handleGenerateDubAudio = async () => {
+    if (!selectedVideo?.path) {
+      showToast('Chưa chọn video để tạo giọng đọc!', 'warning');
+      return;
+    }
+    if (segments.length === 0) {
+      showToast('Cần có ít nhất 1 câu phụ đề để tạo giọng đọc!', 'warning');
+      return;
+    }
+    setIsGeneratingDub(true);
+    showToast(`🎙️ Đang tổng hợp giọng đọc AI (${selectedVoice})...`, 'info');
+    try {
+      const res = await api.generateDubAudio({
+        video_path: selectedVideo.path,
+        voice: selectedVoice,
+        segments: segments,
+      });
+      if (res && res.success) {
+        setHasDubAudio(true);
+        setDubAudioUrl(res.dub_audio_url);
+        setDubAudioFilename(res.dub_audio_filename || 'dub_vi.wav');
+        setDubAudioSize(res.dub_audio_size || 0);
+        setAudioKey(Date.now());
+        showToast('✓ Đã tạo thành công bản lồng tiếng AI tiếng Việt!', 'success');
+      } else {
+        throw new Error(res?.detail || 'Không thể tạo audio lồng tiếng');
+      }
+    } catch (err) {
+      console.warn('Lỗi tạo giọng đọc:', err);
+      showToast(`❌ Lỗi tạo giọng đọc: ${err.message}`, 'error');
+    } finally {
+      setIsGeneratingDub(false);
+    }
   };
 
   // Sync active segment when currentSeconds changes
@@ -266,6 +369,9 @@ export default function StudioScreen({
     setCurrentSeconds(newSeconds);
     if (videoRef.current) {
       videoRef.current.currentTime = newSeconds;
+    }
+    if (dubAudioRef.current && hasDubAudio) {
+      dubAudioRef.current.currentTime = newSeconds;
     }
   };
 
@@ -472,6 +578,14 @@ export default function StudioScreen({
         } else {
           showToast('ℹ️ Không phát hiện giọng nói nào trong video.', 'info');
         }
+
+        if (res?.has_dub_audio || res?.dub_audio_url) {
+          setHasDubAudio(true);
+          setDubAudioUrl(res.dub_audio_url);
+          setDubAudioFilename(res.dub_audio_filename || `${selectedVideo.filename.replace(/\.[^/.]+$/, "")}_dub_vi.wav`);
+          setDubAudioSize(res.dub_audio_size || 0);
+          setAudioKey(Date.now());
+        }
       } else {
         throw new Error(res?.detail || 'Không thể hoàn thành dịch thuật AI');
       }
@@ -656,37 +770,70 @@ export default function StudioScreen({
           >
             {/* Real Native HTML5 Video Stream */}
             {selectedVideo?.path ? (
-              <video
-                ref={videoRef}
-                src={api.getVideoStreamUrl(selectedVideo.path)}
-                className="w-full h-full object-cover"
-                playsInline
-                preload="auto"
-                muted={isOrigMuted}
-                onClick={togglePlayPause}
-                onTimeUpdate={(e) => {
-                  if (!isScrubbing) {
-                    setCurrentSeconds(e.currentTarget.currentTime);
-                  }
-                }}
-                onLoadedMetadata={(e) => {
-                  const dur = e.currentTarget.duration;
-                  if (dur && !isNaN(dur) && dur > 0) {
-                    setTotalSeconds(dur);
-                  }
-                  const vw = e.currentTarget.videoWidth;
-                  const vh = e.currentTarget.videoHeight;
-                  if (vw && vh) {
-                    const ratio = vw / vh;
-                    const isPortrait = ratio < 0.85;
-                    setAspectRatio(isPortrait ? '9:16' : '16:9');
-                    setVideoDims(`${vw} × ${vh} px (${isPortrait ? '9:16 Dọc' : '16:9 Ngang'})`);
-                  }
-                }}
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                onEnded={() => setIsPlaying(false)}
-              />
+              <>
+                <video
+                  ref={videoRef}
+                  src={api.getVideoStreamUrl(selectedVideo.path)}
+                  className="w-full h-full object-cover"
+                  playsInline
+                  preload="auto"
+                  muted={isOrigMuted}
+                  onClick={togglePlayPause}
+                  onTimeUpdate={(e) => {
+                    if (!isScrubbing) {
+                      const t = e.currentTarget.currentTime;
+                      setCurrentSeconds(t);
+                      if (dubAudioRef.current && hasDubAudio && !dubAudioRef.current.paused) {
+                        if (Math.abs(dubAudioRef.current.currentTime - t) > 0.25) {
+                          dubAudioRef.current.currentTime = t;
+                        }
+                      }
+                    }
+                  }}
+                  onLoadedMetadata={(e) => {
+                    const dur = e.currentTarget.duration;
+                    if (dur && !isNaN(dur) && dur > 0) {
+                      setTotalSeconds(dur);
+                    }
+                    const vw = e.currentTarget.videoWidth;
+                    const vh = e.currentTarget.videoHeight;
+                    if (vw && vh) {
+                      const ratio = vw / vh;
+                      const isPortrait = ratio < 0.85;
+                      setAspectRatio(isPortrait ? '9:16' : '16:9');
+                      setVideoDims(`${vw} × ${vh} px (${isPortrait ? '9:16 Dọc' : '16:9 Ngang'})`);
+                    }
+                  }}
+                  onPlay={() => {
+                    setIsPlaying(true);
+                    if (dubAudioRef.current && hasDubAudio && !isDubAudioMuted) {
+                      dubAudioRef.current.currentTime = videoRef.current.currentTime;
+                      dubAudioRef.current.play().catch(() => {});
+                    }
+                  }}
+                  onPause={() => {
+                    setIsPlaying(false);
+                    if (dubAudioRef.current) {
+                      dubAudioRef.current.pause();
+                    }
+                  }}
+                  onEnded={() => {
+                    setIsPlaying(false);
+                    if (dubAudioRef.current) {
+                      dubAudioRef.current.pause();
+                    }
+                  }}
+                />
+
+                {/* Dubbed AI Audio element (synchronized with video) */}
+                {hasDubAudio && dubAudioUrl && (
+                  <audio
+                    ref={dubAudioRef}
+                    src={`${dubAudioUrl}&k=${audioKey}`}
+                    preload="auto"
+                  />
+                )}
+              </>
             ) : (
               /* Trạng thái trống khi chưa có video nào được chọn */
               <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center text-slate-400 bg-slate-950/95 z-20 space-y-3">
@@ -1066,6 +1213,65 @@ export default function StudioScreen({
           {/* TAB 2: AI VOICE */}
           {activeInspectorTab === 'tab-voice' && (
             <div className="p-4 space-y-4 text-xs">
+              
+              {/* TRẠNG THÁI AUDIO LỒNG TIẾNG */}
+              <div className={`p-3 rounded-xl border transition-all ${
+                hasDubAudio 
+                  ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200' 
+                  : 'bg-amber-950/20 border-amber-500/30 text-amber-200'
+              }`}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-xs flex items-center gap-1.5">
+                    {hasDubAudio ? <span>✓ Bản Lồng Tiếng AI Sẵn Sàng</span> : <span>⚠️ Chưa Có Lồng Tiếng AI</span>}
+                  </span>
+                  <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${
+                    hasDubAudio ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'
+                  }`}>
+                    {hasDubAudio ? 'WAV READY' : 'CHƯA TẠO'}
+                  </span>
+                </div>
+
+                {hasDubAudio ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] text-slate-300 leading-relaxed">
+                      Đã có file thuyết minh AI tiếng Việt. Âm thanh sẽ phát đồng bộ khi xem trước (Preview) và hòa âm khi xuất video.
+                    </p>
+                    
+                    {/* Mini Audio Player để nghe thử trực tiếp file WAV */}
+                    <div className="pt-1">
+                      <audio
+                        controls
+                        src={dubAudioUrl ? `${dubAudioUrl}&k=${audioKey}` : undefined}
+                        className="w-full h-8 rounded"
+                      />
+                    </div>
+
+                    <div className="pt-1">
+                      <button
+                        onClick={handleGenerateDubAudio}
+                        disabled={isGeneratingDub}
+                        className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-300 hover:text-white rounded-lg border border-slate-700 font-medium text-[11px] transition flex items-center justify-center gap-1 active:scale-95 disabled:opacity-50"
+                      >
+                        {isGeneratingDub ? '⏳ Đang tổng hợp giọng đọc...' : '🔄 Cập Nhật / Tạo Lại Giọng Đọc'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Video này hiện chưa có file audio thuyết minh tiếng Việt. Bấm nút dưới để tạo giọng đọc AI từ các câu phụ đề hiện có.
+                    </p>
+                    <button
+                      onClick={handleGenerateDubAudio}
+                      disabled={isGeneratingDub || segments.length === 0}
+                      className="w-full py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-lg shadow-md transition flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isGeneratingDub ? '⏳ Đang tổng hợp giọng đọc AI...' : '🎙️ Tạo Ngay Lồng Tiếng AI'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">Giọng đọc lồng tiếng:</label>
                 <select
@@ -1108,14 +1314,46 @@ export default function StudioScreen({
                   onChange={(e) => setAudioDucking(+e.target.value)}
                   className="w-full accent-emerald-500"
                 />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Hạ âm lượng tiếng gốc xuống {audioDucking}% khi nhân vật đọc thuyết minh tiếng Việt.
+                </p>
               </div>
 
-              <button
-                onClick={() => showToast('🔊 Đang phát thử giọng đọc AI câu hiện tại...', 'info')}
-                className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-sky-400 border border-sky-500/30 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-95"
-              >
-                <span>🔊</span> Nghe thử giọng câu này
-              </button>
+              {/* Điều khiển âm thanh Preview */}
+              <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-300">Âm thanh khi Preview:</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={toggleMute}
+                    className={`py-1.5 px-2 rounded-lg border text-[11px] font-medium transition flex items-center justify-center gap-1 ${
+                      isOrigMuted
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                        : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-800'
+                    }`}
+                  >
+                    <span>{isOrigMuted ? '🔇' : '🔊'}</span>
+                    <span>{isOrigMuted ? 'Tiếng gốc: Tắt' : 'Tiếng gốc: Bật'}</span>
+                  </button>
+
+                  <button
+                    onClick={toggleDubMute}
+                    disabled={!hasDubAudio}
+                    className={`py-1.5 px-2 rounded-lg border text-[11px] font-medium transition flex items-center justify-center gap-1 ${
+                      !hasDubAudio
+                        ? 'opacity-40 cursor-not-allowed bg-slate-950 text-slate-600 border-slate-800'
+                        : isDubAudioMuted
+                          ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                          : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/40'
+                    }`}
+                  >
+                    <span>{isDubAudioMuted ? '🔇' : '🎙️'}</span>
+                    <span>{hasDubAudio ? (isDubAudioMuted ? 'Lồng tiếng: Tắt' : 'Lồng tiếng: Bật') : 'Lồng tiếng: Chưa có'}</span>
+                  </button>
+                </div>
+              </div>
+
             </div>
           )}
 
@@ -1409,9 +1647,27 @@ export default function StudioScreen({
                   ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                   : 'bg-slate-800/50 hover:bg-slate-800 text-slate-300 border-slate-700/80'
               }`}
+              title="Bật/Tắt âm thanh gốc của video"
             >
               <span>{isOrigMuted ? '🔇' : '🔊'}</span>
               <span>{isOrigMuted ? 'Tiếng gốc: Tắt' : 'Tiếng gốc: Bật'}</span>
+            </button>
+
+            {/* Dub Audio Toggle */}
+            <button
+              onClick={toggleDubMute}
+              disabled={!hasDubAudio}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-md border text-[11px] transition ${
+                !hasDubAudio
+                  ? 'opacity-40 cursor-not-allowed bg-slate-900 text-slate-600 border-slate-800'
+                  : isDubAudioMuted
+                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                    : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/40'
+              }`}
+              title={hasDubAudio ? (isDubAudioMuted ? 'Bật âm thanh lồng tiếng AI' : 'Tắt âm thanh lồng tiếng AI') : 'Chưa có file audio lồng tiếng AI'}
+            >
+              <span>{isDubAudioMuted ? '🔇' : '🎙️'}</span>
+              <span>{hasDubAudio ? (isDubAudioMuted ? 'Lồng tiếng: Tắt' : 'Lồng tiếng: Bật') : 'Lồng tiếng: Chưa có'}</span>
             </button>
           </div>
 
@@ -1513,6 +1769,17 @@ export default function StudioScreen({
               </div>
               <span className="text-[9px] text-emerald-400 font-mono flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> 9:16 Dọc
+              </span>
+            </div>
+            <div className="h-11 border-t border-slate-800/80 px-2 flex flex-col justify-center text-[11px] bg-slate-900/60">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1 font-semibold text-emerald-400">🎙️ Audio AI</span>
+                <span className={`text-[8px] px-1 py-0.2 rounded font-mono ${hasDubAudio ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-500'}`}>
+                  {hasDubAudio ? 'WAV' : 'OFF'}
+                </span>
+              </div>
+              <span className="text-[8px] text-slate-400 truncate">
+                {hasDubAudio ? (selectedVoice.includes('NamMinh') ? 'Nam Minh' : 'Hoài My') : 'Chưa có'}
               </span>
             </div>
           </div>
@@ -1684,6 +1951,66 @@ export default function StudioScreen({
               ) : (
                 <div className="w-full h-full rounded-lg border border-dashed border-slate-800 flex items-center justify-center text-xs text-slate-600 italic">
                   Chưa có video được nạp vào dòng thời gian
+                </div>
+              )}
+            </div>
+
+            {/* Audio AI Track (Lồng tiếng Việt WAV) */}
+            <div className="h-11 border-t border-slate-800/80 bg-slate-950/70 relative px-1 py-1 flex items-center">
+              {hasDubAudio ? (
+                // CapCut-style Audio waveform blocks matching the subtitle segments
+                segments.map((seg) => {
+                  const leftPct = totalSeconds > 0 ? (seg.start / totalSeconds) * 100 : 0;
+                  const widthPct = totalSeconds > 0 ? ((seg.end - seg.start) / totalSeconds) * 100 : 10;
+                  const isAct = seg.id === activeSegmentId;
+                  return (
+                    <div
+                      key={seg.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveSegmentId(seg.id);
+                        seekTo(seg.start);
+                      }}
+                      style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, 4)}%` }}
+                      className={`absolute h-8 rounded-md cursor-pointer transition flex flex-col justify-center px-1.5 overflow-hidden border ${
+                        isAct
+                          ? 'bg-emerald-600/30 border-emerald-400 text-emerald-200 shadow-md ring-1 ring-emerald-400'
+                          : 'bg-emerald-950/40 hover:bg-emerald-900/50 border-emerald-800/60 text-emerald-400'
+                      }`}
+                      title={`[Audio Lồng Tiếng AI] ${seg.text} (${seg.start}s - ${seg.end}s)`}
+                    >
+                      <div className="flex items-center justify-between text-[8px] font-mono opacity-80 mb-0.5 pointer-events-none">
+                        <span className="truncate">🎙️ {seg.text}</span>
+                        <span>{((seg.end - seg.start)).toFixed(1)}s</span>
+                      </div>
+                      {/* Visual simulated sound waves */}
+                      <div className="flex items-center gap-0.5 h-2.5 opacity-75 pointer-events-none">
+                        {Array.from({ length: 14 }).map((_, barIdx) => (
+                          <div
+                            key={barIdx}
+                            style={{ height: `${25 + ((barIdx * 19) % 75)}%` }}
+                            className="w-1 bg-emerald-400 rounded-full"
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-between px-3 bg-slate-900/30 text-[10px] text-slate-500">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400/60"></span>
+                    Chưa có audio lồng tiếng AI tiếng Việt cho video này
+                  </span>
+                  {selectedVideo && segments.length > 0 && (
+                    <button
+                      onClick={handleGenerateDubAudio}
+                      disabled={isGeneratingDub}
+                      className="px-2 py-0.5 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded text-[10px] font-bold transition flex items-center gap-1 cursor-pointer pointer-events-auto shadow-sm active:scale-95"
+                    >
+                      {isGeneratingDub ? '⏳ Đang tạo...' : '🎙️ Tạo Audio Lồng Tiếng'}
+                    </button>
+                  )}
                 </div>
               )}
             </div>

@@ -96,6 +96,12 @@ class SaveSubtitlesRequest(BaseModel):
     is_orig_muted: bool = False
 
 
+class GenerateDubAudioRequest(BaseModel):
+    video_path: str
+    voice: str = "vi-VN-HoaiMyNeural"
+    segments: list[SubtitleSegmentModel] = Field(default_factory=list)
+
+
 class VideoItemResponse(BaseModel):
     id: int | None = None
     filename: str

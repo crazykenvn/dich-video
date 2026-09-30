@@ -89,6 +89,12 @@ export const getTimelineFrames = (videoPath, count = 16) =>
   apiFetch(`/api/studio/timeline-frames?video_path=${encodeURIComponent(videoPath)}&count=${count}`);
 export const getSubtitles = (videoPath) =>
   apiFetch(`/api/studio/subtitles?video_path=${encodeURIComponent(videoPath)}`);
+export const getDubAudioUrl = (videoPath) =>
+  `/api/studio/dub-audio?video_path=${encodeURIComponent(videoPath)}`;
+export const generateDubAudio = (data) => apiFetch('/api/studio/generate-dub-audio', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
 export const saveSubtitles = (data) => apiFetch('/api/studio/save-subtitles', {
   method: 'POST',
   body: JSON.stringify(data)
