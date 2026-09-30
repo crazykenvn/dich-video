@@ -31,7 +31,7 @@ if not exist ".\.venv\Lib\site-packages\fastapi" (
 
 :: 3. Kiem tra ban build React SPA Frontend
 if not exist ".\frontend\dist\index.html" (
-    echo [*] Dang build giao dien React SPA (Vite + Tailwind)...
+    echo [*] Dang build giao dien React SPA Vite va Tailwind...
     cd frontend && call npm run build && cd ..
 )
 
@@ -39,8 +39,8 @@ echo [*] Dang khoi dong may chu Creator Studio tai http://localhost:8000 ...
 echo [*] Trinh duyet se tu dong mo trong giay lat...
 echo.
 
-:: Mo trinh duyet sau 1.5 giay
-start "" cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:8000"
+:: Mo trinh duyet sau 2 giay
+start "" cmd /c "ping 127.0.0.1 -n 3 >nul & start http://localhost:8000"
 
 :: Khoi dong FastAPI server
 .\.venv\Scripts\python.exe -m uvicorn src.server.app:app --host 127.0.0.1 --port 8000
