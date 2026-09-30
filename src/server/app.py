@@ -104,11 +104,15 @@ def health_check() -> dict[str, str | bool]:
     except Exception:
         has_cuda = os.system("where nvidia-smi >nul 2>&1") == 0
 
+    from ..media import is_nvenc_available
+    has_nvenc = is_nvenc_available()
+
     return {
         "status": "healthy",
         "version": "2.0.0",
         "cuda_ready": has_cuda,
-        "gpu_target": "RTX 3060 12GB NVENC",
+        "nvenc_ready": has_nvenc,
+        "gpu_target": "RTX 3060 12GB NVENC" if has_nvenc else "CPU",
     }
 
 

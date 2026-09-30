@@ -822,7 +822,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                 anti_audio=req.pitch_shift,
                 watermark_enabled=req.watermark_enabled,
                 watermark_path=actual_wm_path,
-                video_quality="high",
+                video_quality="gpu",
             )
         else:
             out_filename = f"{stem}_sub_vi{ext}"
@@ -871,7 +871,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                     watermark_path=actual_wm_path,
                     anti_video=True,
                     anti_audio=req.pitch_shift,
-                    video_quality="high",
+                    video_quality="gpu",
                 )
             else:
                 burn_subtitles(
@@ -887,7 +887,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                     watermark_path=actual_wm_path,
                     anti_video=True,
                     anti_audio=req.pitch_shift,
-                    video_quality="high",
+                    video_quality="gpu",
                 )
 
         # Cập nhật DB

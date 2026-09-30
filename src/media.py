@@ -17,7 +17,11 @@ try:
 except Exception:
     pass
 
+_local_appdata = os.environ.get("LOCALAPPDATA", "")
+_jellyfin_path = Path(_local_appdata) / "Microsoft/WinGet/Packages/Jellyfin.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe"
+
 for _cand in [
+    _jellyfin_path,
     Path(sys.prefix) / "Scripts",
     Path(sys.prefix) / "bin",
     Path(__file__).resolve().parent.parent / ".venv" / "Scripts",
@@ -32,6 +36,27 @@ for _cand in [
 
 class FFmpegError(RuntimeError):
     pass
+
+
+_NVENC_AVAILABLE: bool | None = None
+
+
+def is_nvenc_available() -> bool:
+    """Kiểm tra máy có card NVIDIA hỗ trợ NVENC phần cứng qua FFmpeg hay không."""
+    global _NVENC_AVAILABLE
+    if _NVENC_AVAILABLE is not None:
+        return _NVENC_AVAILABLE
+    try:
+        res = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+        )
+        _NVENC_AVAILABLE = (res.returncode == 0)
+    except Exception:
+        _NVENC_AVAILABLE = False
+    return _NVENC_AVAILABLE
 
 
 def _run(cmd: list[str], timeout: int = 3600) -> subprocess.CompletedProcess:
@@ -171,27 +196,36 @@ def extract_audio(video_path: Path, wav_path: Path, sample_rate: int = 16000) ->
     return wav_path
 
 
-def _get_video_encode_args(video_quality: str = "high") -> list[str]:
+def _get_video_encode_args(video_quality: str = "gpu") -> list[str]:
     """Tùy chọn chất lượng encode:
-    - 'high' (Mặc định, khuyên dùng): libx264 CRF 18, preset veryfast, yuv420p.
-      Giữ trọn 100% độ sắc nét gốc (visually lossless), loại bỏ hoàn toàn hiện tượng vỡ hạt/mờ chữ.
-    - 'medium': libx264 CRF 22, cân bằng dung lượng và tốc độ.
-    - 'gpu': Dùng GPU phần cứng qua h264_mf ở bitrate cao 25M - 35M (Quality 95).
+    - 'gpu' / 'high' (Mặc định): Tự động ưu tiên card NVIDIA RTX qua NVENC (h264_nvenc) siêu tốc, giải phóng 100% CPU.
+    - Fallback 1: Windows Media Foundation GPU (h264_mf).
+    - Fallback 2: CPU libx264 (CRF 18) nếu máy không có card đồ họa rời.
     """
     import sys
-    if video_quality == "gpu" and sys.platform == "win32":
+
+    # 1. Ưu tiên hàng đầu: NVIDIA NVENC Hardware GPU Encoder
+    if is_nvenc_available() and video_quality != "cpu":
+        return [
+            "-c:v", "h264_nvenc",
+            "-preset", "p5",       # Fast / High Quality preset tối ưu cho kiến trúc RTX 30/40
+            "-cq", "18",           # Constant Quality 18 visually lossless
+            "-b:v", "0",           # VBR dựa trên chất lượng
+            "-pix_fmt", "yuv420p",
+        ]
+
+    # 2. Ưu tiên thứ hai: Windows Media Foundation GPU
+    if sys.platform == "win32" and video_quality != "cpu":
         return [
             "-c:v", "h264_mf",
-            "-rate_control", "3",
-            "-quality", "95",
-            "-b:v", "25M",
-            "-maxrate", "35M",
-            "-bufsize", "50M",
+            "-b:v", "18M",
+            "-pix_fmt", "yuv420p",
         ]
-    elif video_quality == "medium":
+
+    # 3. Fallback về CPU libx264 nếu máy không có GPU
+    if video_quality == "medium":
         return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p"]
-    else:  # default "high" (CRF 18 visually lossless)
-        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
 
 
 def get_visual_anti_detect_filter() -> str:
@@ -444,16 +478,16 @@ def mux_audio(
         _run(cmd)
     except Exception:
         # Fallback về libx264 CRF 18 nếu GPU encoder gặp vấn đề
-        if need_video_encode and "h264_mf" in cmd:
+        if need_video_encode and any(enc in cmd for enc in ("h264_nvenc", "h264_mf")):
             fallback_cmd = []
             skip = False
             for c in cmd:
                 if skip:
                     skip = False
                     continue
-                if c == "h264_mf":
+                if c in ("h264_nvenc", "h264_mf"):
                     fallback_cmd.append("libx264")
-                elif c in ("-rate_control", "-quality", "-b:v", "-maxrate", "-bufsize"):
+                elif c in ("-rate_control", "-quality", "-b:v", "-maxrate", "-bufsize", "-preset", "-cq"):
                     skip = True
                     continue
                 else:
@@ -583,16 +617,16 @@ def remix_video(
     try:
         _run(cmd)
     except Exception:
-        if need_video_encode and "h264_mf" in cmd:
+        if need_video_encode and any(enc in cmd for enc in ("h264_nvenc", "h264_mf")):
             fallback_cmd = []
             skip = False
             for c in cmd:
                 if skip:
                     skip = False
                     continue
-                if c == "h264_mf":
+                if c in ("h264_nvenc", "h264_mf"):
                     fallback_cmd.append("libx264")
-                elif c in ("-rate_control", "-quality", "-b:v", "-maxrate", "-bufsize"):
+                elif c in ("-rate_control", "-quality", "-b:v", "-maxrate", "-bufsize", "-preset", "-cq"):
                     skip = True
                     continue
                 else:
