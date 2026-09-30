@@ -268,23 +268,36 @@ def get_subtitle_ass_style(
     alpha_int = int(round((1.0 - op) * 255))
     alpha_hex = f"{alpha_int:02X}"
 
-    if sub_style in ("solid_black", "black_box"):
-        # Nền đen với độ mờ tùy chỉnh, chữ trắng
+    # PlayResY=462, PlayResX=260: Khóa tọa độ chuẩn theo tỷ lệ khung Preview Canvas (260x462px)
+    # Giúp MarginV, FontSize và Outline khớp 100% với màn hình Studio biên tập, không bị lệch/chạy lên trên
+    res_prefix = "PlayResY=462,PlayResX=260,"
+
+    if sub_style == "blur_box":
+        # Kính mờ (Frosted Blur Glass): Hộp tối bán trong suốt 65% che kín phụ đề gốc
+        blur_alpha = "58"  # ~65% opacity
+        blur_bg = f"&H{blur_alpha}251912"  # Màu Slate Navy tối sang trọng (#121925)
         return (
-            f"FontName={font_name},FontSize={font_size},"
+            f"{res_prefix}FontName={font_name},FontSize={font_size},"
+            f"PrimaryColour=&H00FFFFFF,OutlineColour={blur_bg},BackColour={blur_bg},"
+            f"BorderStyle=3,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
+        )
+    elif sub_style in ("solid_black", "black_box"):
+        # Nền đen đặc hoặc mờ tùy chỉnh, chữ trắng
+        return (
+            f"{res_prefix}FontName={font_name},FontSize={font_size},"
             f"PrimaryColour=&H00FFFFFF,OutlineColour=&H{alpha_hex}000000,BackColour=&H{alpha_hex}000000,"
             f"BorderStyle=3,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
         )
     elif sub_style in ("solid_white", "white_box"):
         # Nền trắng với độ mờ tùy chỉnh, chữ đen
         return (
-            f"FontName={font_name},FontSize={font_size},"
+            f"{res_prefix}FontName={font_name},FontSize={font_size},"
             f"PrimaryColour=&H00000000,OutlineColour=&H{alpha_hex}FFFFFF,BackColour=&H{alpha_hex}FFFFFF,"
             f"BorderStyle=3,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
         )
     else:  # classic
         return (
-            f"FontName={font_name},FontSize={font_size},"
+            f"{res_prefix}FontName={font_name},FontSize={font_size},"
             f"PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&HFF000000,"
             f"BorderStyle=1,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
         )

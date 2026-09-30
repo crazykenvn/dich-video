@@ -43,7 +43,7 @@ echo.
 start "" cmd /c "ping 127.0.0.1 -n 3 >nul & start http://localhost:8000"
 
 :: Khoi dong FastAPI server
-.\.venv\Scripts\python.exe -m uvicorn src.server.app:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn src.server.app:app --host 127.0.0.1 --port 8000 --reload
 
 if errorlevel 1 (
     echo.

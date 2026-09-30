@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -17,12 +19,14 @@ from ...media import (
     extract_audio,
     extract_preview_frame,
     get_video_resolution,
+    mux_audio,
     remix_video,
 )
 from ...subtitles import read_srt, write_srt
 from ...transcribe import Segment, Transcriber
 from ...translate import Translator
-from ..models import AutoTranslateRequest, RenderConfigRequest
+from ...tts import build_dub_track
+from ..models import AutoTranslateRequest, RenderConfigRequest, SaveSubtitlesRequest
 from .videos import resolve_video_path
 
 router = APIRouter(prefix="/studio", tags=["Studio & Editor"])
@@ -158,22 +162,47 @@ def get_timeline_frames(
 
 
 @router.get("/subtitles")
-def get_video_subtitles(video_path: str = Query(..., description="Đường dẫn file video")) -> list[dict[str, Any]]:
-    """Tìm và đọc các câu phụ đề từ file .srt có sẵn đi kèm với video (nếu có)."""
+def get_video_subtitles(video_path: str = Query(..., description="Đường dẫn file video")) -> dict[str, Any]:
+    """Tìm và đọc các câu phụ đề & cài đặt style đã lưu từ dự án trước (nếu có)."""
     try:
         target_p = resolve_video_path(video_path)
     except Exception:
-        return []
+        return {"has_sub": False, "segments": [], "meta": None}
 
     if not target_p.exists() or not target_p.is_file():
-        return []
+        return {"has_sub": False, "segments": [], "meta": None}
 
     stem = target_p.stem
     parent = target_p.parent
+    sub_dir = OUTPUT_DIR / "subtitles"
+    sub_dir.mkdir(parents=True, exist_ok=True)
 
-    # Các file srt có thể có: stem.srt, stem_vi.srt, stem_sub.srt
+    # 1. Kiểm tra file metadata JSON đã lưu dự án
+    meta_json = sub_dir / f"{stem}_meta.json"
+    if meta_json.exists():
+        try:
+            data = json.loads(meta_json.read_text(encoding="utf-8"))
+            segs = data.get("segments", [])
+            return {
+                "has_sub": len(segs) > 0,
+                "segments": segs,
+                "meta": {
+                    "margin_v": data.get("margin_v", 38),
+                    "mask_style": data.get("mask_style", "blur_box"),
+                    "font_size": data.get("font_size", 13),
+                    "box_padding": data.get("box_padding", 6),
+                    "box_width": data.get("box_width", 88),
+                    "voice": data.get("voice", "vi-VN-HoaiMyNeural"),
+                    "is_orig_muted": data.get("is_orig_muted", False),
+                },
+            }
+        except Exception as e:
+            print(f"[studio subtitles] Lỗi đọc meta json: {e}")
+
+    # 2. Tìm file srt có sẵn
     candidate_srts = [
         parent / f"{stem}_vi.srt",
+        sub_dir / f"{stem}_vi.srt",
         parent / f"{stem}.srt",
         parent / f"{stem}_sub.srt",
         parent / f"{stem}.zh.srt",
@@ -186,11 +215,11 @@ def get_video_subtitles(video_path: str = Query(..., description="Đường dẫ
             break
 
     if not found_srt:
-        return []
+        return {"has_sub": False, "segments": [], "meta": None}
 
     try:
         segs = read_srt(found_srt)
-        return [
+        formatted = [
             {
                 "id": s.index,
                 "start": round(s.start, 2),
@@ -199,9 +228,61 @@ def get_video_subtitles(video_path: str = Query(..., description="Đường dẫ
             }
             for s in segs
         ]
+        return {
+            "has_sub": len(formatted) > 0,
+            "segments": formatted,
+            "meta": None,
+        }
     except Exception as e:
         print(f"[studio subtitles] Lỗi đọc srt: {e}")
-        return []
+        return {"has_sub": False, "segments": [], "meta": None}
+
+
+@router.post("/save-subtitles")
+def save_video_subtitles(req: SaveSubtitlesRequest) -> dict[str, Any]:
+    """Lưu vĩnh viễn phụ đề và các cấu hình style vào file dự án để không cần dịch lại."""
+    try:
+        target_p = resolve_video_path(req.video_path)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy video: {req.video_path}")
+
+    stem = target_p.stem
+    parent = target_p.parent
+    sub_dir = OUTPUT_DIR / "subtitles"
+    sub_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Ghi file SRT cạnh video và trong thư mục subtitles/
+    seg_objs = [
+        Segment(index=s.id, start=s.start, end=s.end, text=s.text, translated=s.text)
+        for s in req.segments
+    ]
+    srt_path = parent / f"{stem}_vi.srt"
+    write_srt(seg_objs, srt_path, use_translated=True)
+    write_srt(seg_objs, sub_dir / f"{stem}_vi.srt", use_translated=True)
+
+    # 2. Ghi metadata JSON
+    meta_path = sub_dir / f"{stem}_meta.json"
+    meta_data = {
+        "video_path": str(target_p),
+        "segments": [s.model_dump() for s in req.segments],
+        "margin_v": req.margin_v,
+        "mask_style": req.mask_style,
+        "font_size": req.font_size,
+        "box_padding": req.box_padding,
+        "box_width": req.box_width,
+        "voice": req.voice,
+        "is_orig_muted": req.is_orig_muted,
+        "updated_at": datetime.now().isoformat(),
+    }
+    meta_path.write_text(json.dumps(meta_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return {
+        "success": True,
+        "message": f"Đã lưu thành công {len(req.segments)} câu phụ đề và cấu hình dự án!",
+        "srt_path": str(srt_path),
+        "meta_path": str(meta_path),
+        "count": len(req.segments),
+    }
 
 
 def _do_auto_translate(req: AutoTranslateRequest) -> dict[str, Any]:
@@ -215,6 +296,7 @@ def _do_auto_translate(req: AutoTranslateRequest) -> dict[str, Any]:
     device = req.device or settings.get("device", "cuda")
     source_lang = req.source_lang or settings.get("source_lang", "zh-CN")
     target_lang = req.target_lang or settings.get("target_lang", "vi")
+    selected_voice = req.voice or settings.get("voice", "vi-VN-HoaiMyNeural")
 
     ACTIVE_TRANSLATIONS[video_key] = {
         "status": "running",
@@ -258,7 +340,7 @@ def _do_auto_translate(req: AutoTranslateRequest) -> dict[str, Any]:
         if not raw_segments:
             ACTIVE_TRANSLATIONS[video_key] = {
                 "status": "completed",
-                "step": 3,
+                "step": 4,
                 "progress": 100,
                 "message": "Không tìm thấy giọng nói trong video.",
                 "segments": [],
@@ -286,7 +368,7 @@ def _do_auto_translate(req: AutoTranslateRequest) -> dict[str, Any]:
             ACTIVE_TRANSLATIONS[video_key] = {
                 "status": "running",
                 "step": 3,
-                "progress": min(95, max(68, mapped)),
+                "progress": min(80, max(68, mapped)),
                 "message": msg,
                 "segments": [],
             }
@@ -311,22 +393,83 @@ def _do_auto_translate(req: AutoTranslateRequest) -> dict[str, Any]:
             for s in translated_segments
         ]
 
+        # 5. Lồng tiếng AI (TTS Edge-TTS) sang file WAV
+        ACTIVE_TRANSLATIONS[video_key] = {
+            "status": "running",
+            "step": 4,
+            "progress": 82,
+            "message": f"Đang lồng tiếng AI tiếng Việt ({selected_voice})...",
+            "segments": formatted_segments,
+        }
+
+        dub_wav = target_p.parent / f"{target_p.stem}_dub_vi.wav"
+        tts_work_dir = OUTPUT_DIR / "temp" / f"tts_{target_p.stem}"
+        tts_work_dir.mkdir(parents=True, exist_ok=True)
+
+        def tts_progress(msg: str, p: float):
+            mapped = int(82 + (p - 0.76) / 0.18 * 16)
+            ACTIVE_TRANSLATIONS[video_key] = {
+                "status": "running",
+                "step": 4,
+                "progress": min(98, max(82, mapped)),
+                "message": msg,
+                "segments": formatted_segments,
+            }
+
+        try:
+            total_dur = duration_seconds(target_p)
+            build_dub_track(
+                segments=translated_segments,
+                total_duration=total_dur,
+                work_dir=tts_work_dir,
+                output_wav=dub_wav,
+                target_lang=target_lang,
+                voice=selected_voice,
+                fit_timing=settings.get("fit_timing", True),
+                progress=tts_progress,
+                resolve_overlap=settings.get("resolve_overlap", True),
+            )
+        except Exception as e_tts:
+            print(f"[studio auto-translate] Cảnh báo tạo voiceover: {e_tts}")
+
+        # 6. Lưu vĩnh viễn cấu hình & phụ đề vào file dự án (_meta.json + _vi.srt)
+        sub_dir = OUTPUT_DIR / "subtitles"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        meta_data = {
+            "video_path": str(target_p),
+            "segments": formatted_segments,
+            "margin_v": 38,
+            "mask_style": "blur_box",
+            "font_size": 13,
+            "box_padding": 6,
+            "box_width": 88,
+            "voice": selected_voice,
+            "is_orig_muted": False,
+            "updated_at": datetime.now().isoformat(),
+        }
+        (sub_dir / f"{target_p.stem}_meta.json").write_text(
+            json.dumps(meta_data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        write_srt(translated_segments, sub_dir / f"{target_p.stem}_vi.srt", use_translated=True)
+
         ACTIVE_TRANSLATIONS[video_key] = {
             "status": "completed",
-            "step": 3,
+            "step": 4,
             "progress": 100,
-            "message": f"Dịch thành công {len(formatted_segments)} đoạn hội thoại!",
+            "message": f"Dịch & lồng tiếng thành công {len(formatted_segments)} đoạn hội thoại!",
             "segments": formatted_segments,
             "detected_language": detected_lang,
+            "dub_audio": str(dub_wav) if dub_wav.exists() else None,
         }
 
         return {
             "success": True,
-            "message": f"Đã nhận diện và dịch thành công {len(formatted_segments)} câu!",
+            "message": f"Đã nhận diện, dịch và lồng tiếng thành công {len(formatted_segments)} câu!",
             "detected_language": detected_lang,
             "segments": formatted_segments,
             "count": len(formatted_segments),
             "srt_path": str(srt_path),
+            "dub_audio": str(dub_wav) if dub_wav.exists() else None,
         }
     except Exception as e:
         ACTIVE_TRANSLATIONS[video_key] = {
@@ -553,21 +696,60 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
             ]
             write_srt(seg_objs, srt_path, use_translated=True)
 
-            burn_subtitles(
-                video_path=target_p,
-                srt_path=srt_path,
-                output_path=out_path,
-                font_size=req.font_size,
-                sub_style=req.mask_style,
-                sub_margin_v=req.margin_v,
-                box_padding=req.box_padding,
-                box_opacity=req.box_opacity,
-                watermark_enabled=req.watermark_enabled,
-                watermark_path=actual_wm_path,
-                anti_video=True,
-                anti_audio=req.pitch_shift,
-                video_quality="high",
-            )
+            # 1. Kiểm tra hoặc tổng hợp audio lồng tiếng AI tiếng Việt
+            dub_wav = target_p.parent / f"{stem}_dub_vi.wav"
+            if not dub_wav.exists() and seg_objs:
+                tts_work_dir = OUTPUT_DIR / "temp" / f"tts_{stem}"
+                try:
+                    total_dur = duration_seconds(target_p)
+                    build_dub_track(
+                        segments=seg_objs,
+                        total_duration=total_dur,
+                        work_dir=tts_work_dir,
+                        output_wav=dub_wav,
+                        target_lang="vi",
+                        voice=req.voice or "vi-VN-HoaiMyNeural",
+                    )
+                except Exception as e_tts:
+                    print(f"[studio export] Cảnh báo tạo voiceover: {e_tts}")
+
+            # 2. Render video thành phẩm: hòa âm tiếng Việt + đè phụ đề chuẩn Canvas + watermark
+            if dub_wav.exists():
+                orig_mix = 0.0 if req.is_orig_muted else (float(req.audio_ducking or 12) / 100.0)
+                mux_audio(
+                    video_path=target_p,
+                    audio_path=dub_wav,
+                    output_path=out_path,
+                    original_mix=orig_mix,
+                    srt_path=srt_path,
+                    burn_sub=True,
+                    font_size=req.font_size,
+                    sub_style=req.mask_style,
+                    sub_margin_v=req.margin_v,
+                    box_padding=req.box_padding,
+                    box_opacity=req.box_opacity,
+                    watermark_enabled=req.watermark_enabled,
+                    watermark_path=actual_wm_path,
+                    anti_video=True,
+                    anti_audio=req.pitch_shift,
+                    video_quality="high",
+                )
+            else:
+                burn_subtitles(
+                    video_path=target_p,
+                    srt_path=srt_path,
+                    output_path=out_path,
+                    font_size=req.font_size,
+                    sub_style=req.mask_style,
+                    sub_margin_v=req.margin_v,
+                    box_padding=req.box_padding,
+                    box_opacity=req.box_opacity,
+                    watermark_enabled=req.watermark_enabled,
+                    watermark_path=actual_wm_path,
+                    anti_video=True,
+                    anti_audio=req.pitch_shift,
+                    video_quality="high",
+                )
 
         # Cập nhật DB
         init_db()

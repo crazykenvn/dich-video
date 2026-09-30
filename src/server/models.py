@@ -80,6 +80,20 @@ class RenderConfigRequest(BaseModel):
     pitch_shift: bool = True
     watermark_enabled: bool = True
     watermark_text: str = "KEN STUDIO"
+    is_orig_muted: bool = False
+    audio_ducking: int = 12
+
+
+class SaveSubtitlesRequest(BaseModel):
+    video_path: str
+    segments: list[SubtitleSegmentModel] = Field(default_factory=list)
+    margin_v: int = 38
+    mask_style: str = "solid_black"
+    font_size: int = 16
+    box_padding: int = 6
+    box_width: int = 88
+    voice: str = "vi-VN-HoaiMyNeural"
+    is_orig_muted: bool = False
 
 
 class VideoItemResponse(BaseModel):
@@ -103,3 +117,4 @@ class AutoTranslateRequest(BaseModel):
     target_lang: str = "vi"
     model_size: str | None = None
     device: str | None = None
+    voice: str = "vi-VN-HoaiMyNeural"

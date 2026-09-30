@@ -90,14 +90,24 @@ export default function StudioScreen({
   useEffect(() => {
     if (selectedVideo?.path) {
       loadVideoDetails(selectedVideo.path);
-      // Nạp phụ đề srt có sẵn đi kèm nếu có (hoặc để mảng rỗng)
-      api.getSubtitles(selectedVideo.path).then(subs => {
-        if (subs && Array.isArray(subs) && subs.length > 0) {
+      // Nạp phụ đề srt và cấu hình style đã lưu từ dự án trước nếu có
+      api.getSubtitles(selectedVideo.path).then(res => {
+        const subs = Array.isArray(res) ? res : (res?.segments || []);
+        if (subs && subs.length > 0) {
           setSegments(subs);
           setActiveSegmentId(subs[0].id);
         } else {
           setSegments([]);
           setActiveSegmentId(null);
+        }
+        if (res?.meta) {
+          if (res.meta.margin_v !== undefined) setMarginV(res.meta.margin_v);
+          if (res.meta.mask_style) setMaskStyle(res.meta.mask_style);
+          if (res.meta.font_size) setFontSize(res.meta.font_size);
+          if (res.meta.box_padding) setBoxPadding(res.meta.box_padding);
+          if (res.meta.box_width) setBoxWidth(res.meta.box_width);
+          if (res.meta.voice) setSelectedVoice(res.meta.voice);
+          if (res.meta.is_orig_muted !== undefined) setIsOrigMuted(res.meta.is_orig_muted);
         }
       });
       if (videoRef.current) {
@@ -436,11 +446,12 @@ export default function StudioScreen({
     }, 500);
 
     try {
-      showToast('🚀 Khởi chạy chu trình Dịch AI (Whisper + Gemini)...', 'info');
+      showToast('🚀 Khởi chạy chu trình Dịch AI (Whisper + Gemini + Lồng tiếng)...', 'info');
       const res = await api.autoTranslate({
         video_path: selectedVideo.path,
         source_lang: 'zh-CN',
         target_lang: 'vi',
+        voice: selectedVoice,
       });
 
       if (translatePollTimerRef.current) {
@@ -450,14 +461,14 @@ export default function StudioScreen({
 
       if (res && res.success) {
         setTranslateProgress(100);
-        setTranslateStep(3);
-        setTranslateMessage(res.message || 'Dịch thuật hoàn tất!');
+        setTranslateStep(4);
+        setTranslateMessage(res.message || 'Dịch thuật & Lồng tiếng hoàn tất!');
         setTranslateSuccessData(res);
 
         if (res.segments && res.segments.length > 0) {
           setSegments(res.segments);
           setActiveSegmentId(res.segments[0].id);
-          showToast(`✓ Đã nhận diện & dịch thành công ${res.segments.length} câu! Phụ đề đã nạp vào Studio.`, 'success');
+          showToast(`✓ Đã dịch & lồng tiếng thành công ${res.segments.length} câu! Dữ liệu đã tự động lưu vào dự án.`, 'success');
         } else {
           showToast('ℹ️ Không phát hiện giọng nói nào trong video.', 'info');
         }
@@ -471,6 +482,30 @@ export default function StudioScreen({
       }
       setTranslateError(err.message || 'Lỗi xử lý dịch thuật');
       showToast(`❌ Lỗi dịch AI: ${err.message}`, 'error');
+    }
+  };
+
+  const handleSaveProject = async () => {
+    if (!selectedVideo?.path) {
+      showToast('Chưa chọn video nào để lưu!', 'warning');
+      return;
+    }
+    showToast('💾 Đang lưu phụ đề & cấu hình dự án...', 'info');
+    const res = await api.saveSubtitles({
+      video_path: selectedVideo.path,
+      segments: segments,
+      margin_v: marginV,
+      mask_style: maskStyle,
+      font_size: fontSize,
+      box_padding: boxPadding,
+      box_width: boxWidth,
+      voice: selectedVoice,
+      is_orig_muted: isOrigMuted,
+    });
+    if (res && res.success) {
+      showToast(`✓ Đã lưu thành công dự án video (${res.count || segments.length} câu)! Bạn có thể quay lại biên tập bất kỳ lúc nào mà không lo mất.`, 'success');
+    } else {
+      showToast('❌ Không thể lưu cấu hình dự án!', 'error');
     }
   };
 
@@ -512,7 +547,7 @@ export default function StudioScreen({
     }, 400);
 
     try {
-      showToast(`🚀 Đang xuất video NVENC [${workflowMode === 'remix' ? 'Chỉ Lách BQ' : 'Dịch & Đè Sub'}]...`, 'info');
+      showToast(`🚀 Đang xuất video NVENC [${workflowMode === 'remix' ? 'Chỉ Lách BQ' : 'Dịch, Lồng Tiếng & Đè Sub'}]...`, 'info');
 
       const res = await api.exportVideo({
         video_path: selectedVideo.path,
@@ -529,6 +564,8 @@ export default function StudioScreen({
         pitch_shift: pitchShift,
         watermark_enabled: watermarkEnabled,
         watermark_text: watermarkText,
+        is_orig_muted: isOrigMuted,
+        audio_ducking: audioDucking,
       });
 
       clearInterval(progressTimer);
@@ -882,6 +919,15 @@ export default function StudioScreen({
                     >
                       <Sparkles className="w-3 h-3" />
                       <span>Dịch lại</span>
+                    </button>
+                    <button
+                      onClick={handleSaveProject}
+                      disabled={!selectedVideo}
+                      className="px-2 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 rounded border border-emerald-500/30 text-[10px] font-bold flex items-center gap-1 transition"
+                      title="Lưu lại cấu hình phụ đề và style để không bị mất"
+                    >
+                      <span>💾</span>
+                      <span>Lưu</span>
                     </button>
                     <button
                       onClick={() => srtInputRef.current?.click()}
@@ -1303,6 +1349,16 @@ export default function StudioScreen({
               <span className="font-medium text-[11px]">Nhập SRT</span>
             </button>
 
+            <button
+              onClick={handleSaveProject}
+              disabled={!selectedVideo || segments.length === 0}
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 hover:text-white rounded-md border border-emerald-500/40 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              title="Lưu lại phụ đề và cài đặt dự án này"
+            >
+              <span>💾</span>
+              <span className="font-bold text-[11px]">Lưu Dự Án</span>
+            </button>
+
             <div className="w-px h-4 bg-slate-800 mx-0.5"></div>
 
             <button
@@ -1715,42 +1771,54 @@ export default function StudioScreen({
               <span className="font-mono text-sm font-bold text-sky-400">{translateProgress}%</span>
             </div>
 
-            {/* 3-Step Visual Badges */}
-            <div className="grid grid-cols-3 gap-2 py-1">
-              <div className={`p-2.5 rounded-xl border text-center transition ${
+            {/* 4-Step Visual Badges */}
+            <div className="grid grid-cols-4 gap-2 py-1">
+              <div className={`p-2 rounded-xl border text-center transition ${
                 translateStep === 1 
                   ? 'bg-sky-500/20 border-sky-400 text-sky-300 ring-1 ring-sky-400' 
                   : translateStep > 1 
                     ? 'bg-slate-800/80 border-emerald-500/50 text-emerald-400' 
                     : 'bg-slate-950/60 border-slate-800 text-slate-500'
               }`}>
-                <div className="text-base mb-1">{translateStep > 1 ? '✓' : '🎵'}</div>
+                <div className="text-base mb-0.5">{translateStep > 1 ? '✓' : '🎵'}</div>
                 <div className="text-[11px] font-bold">1. Tách Audio</div>
-                <div className="text-[9px] text-slate-400">WAV PCM 16kHz</div>
+                <div className="text-[9px] text-slate-400">WAV PCM</div>
               </div>
 
-              <div className={`p-2.5 rounded-xl border text-center transition ${
+              <div className={`p-2 rounded-xl border text-center transition ${
                 translateStep === 2 
                   ? 'bg-sky-500/20 border-sky-400 text-sky-300 ring-1 ring-sky-400' 
                   : translateStep > 2 
                     ? 'bg-slate-800/80 border-emerald-500/50 text-emerald-400' 
                     : 'bg-slate-950/60 border-slate-800 text-slate-500'
               }`}>
-                <div className="text-base mb-1">{translateStep > 2 ? '✓' : '🎙️'}</div>
+                <div className="text-base mb-0.5">{translateStep > 2 ? '✓' : '🎙️'}</div>
                 <div className="text-[11px] font-bold">2. Bóc Băng</div>
                 <div className="text-[9px] text-slate-400">Whisper CUDA</div>
               </div>
 
-              <div className={`p-2.5 rounded-xl border text-center transition ${
-                translateStep === 3 && translateProgress < 100
+              <div className={`p-2 rounded-xl border text-center transition ${
+                translateStep === 3 
+                  ? 'bg-sky-500/20 border-sky-400 text-sky-300 ring-1 ring-sky-400' 
+                  : translateStep > 3 
+                    ? 'bg-slate-800/80 border-emerald-500/50 text-emerald-400' 
+                    : 'bg-slate-950/60 border-slate-800 text-slate-500'
+              }`}>
+                <div className="text-base mb-0.5">{translateStep > 3 ? '✓' : '🌐'}</div>
+                <div className="text-[11px] font-bold">3. Dịch Ngữ Nghĩa</div>
+                <div className="text-[9px] text-slate-400">Gemini Flash</div>
+              </div>
+
+              <div className={`p-2 rounded-xl border text-center transition ${
+                translateStep === 4 && translateProgress < 100
                   ? 'bg-sky-500/20 border-sky-400 text-sky-300 ring-1 ring-sky-400' 
                   : translateProgress === 100 
                     ? 'bg-slate-800/80 border-emerald-500/50 text-emerald-400' 
                     : 'bg-slate-950/60 border-slate-800 text-slate-500'
               }`}>
-                <div className="text-base mb-1">{translateProgress === 100 ? '✓' : '🌐'}</div>
-                <div className="text-[11px] font-bold">3. Dịch Ngữ Nghĩa</div>
-                <div className="text-[9px] text-slate-400">Gemini Flash</div>
+                <div className="text-base mb-0.5">{translateProgress === 100 ? '✓' : '🗣️'}</div>
+                <div className="text-[11px] font-bold">4. Lồng Tiếng AI</div>
+                <div className="text-[9px] text-slate-400">{selectedVoice.replace('vi-VN-', '')}</div>
               </div>
             </div>
 
