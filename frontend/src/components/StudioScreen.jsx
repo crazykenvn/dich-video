@@ -129,12 +129,17 @@ export default function StudioScreen({
     }
   };
 
+  const addCacheBuster = (url) => {
+    if (!url) return null;
+    return url.includes('?') ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`;
+  };
+
   // Nạp thông tin logo thương hiệu đã lưu vĩnh viễn lúc mở Studio
   useEffect(() => {
     api.getLogoInfo().then(info => {
       if (info) {
         if (info.exists && info.url) {
-          setWatermarkLogoUrl(`${info.url}?t=${Date.now()}`);
+          setWatermarkLogoUrl(addCacheBuster(info.url));
           setWatermarkFilename(info.filename);
           setWatermarkType('image');
         }
@@ -154,7 +159,7 @@ export default function StudioScreen({
     showToast('Đang tải lên và lưu logo thương hiệu...', 'info');
     const res = await api.uploadLogo(file);
     if (res && res.success) {
-      setWatermarkLogoUrl(`${res.url}?t=${Date.now()}`);
+      setWatermarkLogoUrl(addCacheBuster(res.url));
       setWatermarkFilename(res.filename);
       setWatermarkType('image');
       setWatermarkEnabled(true);

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from ...config import OUTPUT_DIR
 from ...downloader.settings import load_settings, save_settings
@@ -39,6 +40,16 @@ def browse(path: str = Query(..., description="Đường dẫn thư mục cần 
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi khi duyệt thư mục: {e}")
+
+
+@router.get("/file")
+def get_local_file(path: str = Query(..., description="Đường dẫn file trên máy tính")):
+    """Phục vụ file tĩnh trên hệ thống file nội bộ."""
+    clean_path = path.split("?")[0].strip('"\'')
+    p = Path(clean_path)
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy file: {clean_path}")
+    return FileResponse(str(p))
 
 
 @router.post("/open-folder")

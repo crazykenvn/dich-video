@@ -439,7 +439,7 @@ async def upload_watermark_logo(file: UploadFile = File(...)) -> dict[str, Any]:
         "message": "Đã lưu ảnh logo thương hiệu thành công",
         "filename": dest_path.name,
         "path": str(dest_path),
-        "url": f"/api/fs/file?path={dest_path}",
+        "url": f"/branding/{dest_path.name}",
     }
 
 
@@ -452,11 +452,18 @@ def get_watermark_logo_info() -> dict[str, Any]:
     url = None
     filename = None
     if wm_path:
-        p = Path(wm_path)
+        p = Path(wm_path).resolve()
         if p.exists() and p.is_file():
             exists = True
             filename = p.name
-            url = f"/api/fs/file?path={p}"
+            branding_dir = (OUTPUT_DIR / "branding").resolve()
+            try:
+                if p.is_relative_to(branding_dir):
+                    url = f"/branding/{p.name}"
+                else:
+                    url = f"/api/fs/file?path={p}"
+            except Exception:
+                url = f"/branding/{p.name}"
 
     return {
         "exists": exists,
