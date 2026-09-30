@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from ...config import OUTPUT_DIR
 from ...downloader.db import get_connection, init_db
@@ -13,16 +14,20 @@ from ...downloader.settings import load_settings, save_settings
 from ...media import (
     burn_subtitles,
     duration_seconds,
+    extract_audio,
     extract_preview_frame,
     get_video_resolution,
     remix_video,
 )
 from ...subtitles import read_srt, write_srt
-from ...transcribe import Segment
-from ..models import RenderConfigRequest
+from ...transcribe import Segment, Transcriber
+from ...translate import Translator
+from ..models import AutoTranslateRequest, RenderConfigRequest
 from .videos import resolve_video_path
 
 router = APIRouter(prefix="/studio", tags=["Studio & Editor"])
+
+ACTIVE_TRANSLATIONS: dict[str, dict[str, Any]] = {}
 
 
 @router.get("/presets")
@@ -197,6 +202,215 @@ def get_video_subtitles(video_path: str = Query(..., description="Đường dẫ
     except Exception as e:
         print(f"[studio subtitles] Lỗi đọc srt: {e}")
         return []
+
+
+def _do_auto_translate(req: AutoTranslateRequest) -> dict[str, Any]:
+    target_p = resolve_video_path(req.video_path)
+    if not target_p.exists() or not target_p.is_file():
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy video: {req.video_path}")
+
+    video_key = str(target_p)
+    settings = load_settings()
+    model_size = req.model_size or settings.get("model_size", "medium")
+    device = req.device or settings.get("device", "cuda")
+    source_lang = req.source_lang or settings.get("source_lang", "zh-CN")
+    target_lang = req.target_lang or settings.get("target_lang", "vi")
+
+    ACTIVE_TRANSLATIONS[video_key] = {
+        "status": "running",
+        "step": 1,
+        "progress": 10,
+        "message": "Đang trích xuất âm thanh từ video...",
+        "segments": [],
+    }
+
+    try:
+        # 1. Trích xuất audio
+        wav_dir = OUTPUT_DIR / "temp" / "audio"
+        wav_dir.mkdir(parents=True, exist_ok=True)
+        wav_path = wav_dir / f"{target_p.stem}_studio.wav"
+        extract_audio(target_p, wav_path)
+
+        # 2. Whisper nhận diện
+        ACTIVE_TRANSLATIONS[video_key] = {
+            "status": "running",
+            "step": 2,
+            "progress": 30,
+            "message": f"Whisper AI ({model_size}) đang nhận diện giọng nói...",
+            "segments": [],
+        }
+
+        def whisper_progress(msg: str, p: float):
+            mapped = 30 + int(p * 60)
+            ACTIVE_TRANSLATIONS[video_key] = {
+                "status": "running",
+                "step": 2,
+                "progress": min(65, mapped),
+                "message": msg,
+                "segments": [],
+            }
+
+        transcriber = Transcriber(model_size=model_size, device=device)
+        raw_segments, detected_lang = transcriber.run(
+            wav_path, source_lang=source_lang, progress=whisper_progress
+        )
+
+        if not raw_segments:
+            ACTIVE_TRANSLATIONS[video_key] = {
+                "status": "completed",
+                "step": 3,
+                "progress": 100,
+                "message": "Không tìm thấy giọng nói trong video.",
+                "segments": [],
+                "detected_language": detected_lang,
+            }
+            return {
+                "success": True,
+                "message": "Không tìm thấy giọng nói trong video.",
+                "detected_language": detected_lang,
+                "segments": [],
+                "count": 0,
+            }
+
+        # 3. Gemini dịch sang tiếng Việt
+        ACTIVE_TRANSLATIONS[video_key] = {
+            "status": "running",
+            "step": 3,
+            "progress": 68,
+            "message": f"Gemini đang dịch {len(raw_segments)} câu sang tiếng Việt...",
+            "segments": [],
+        }
+
+        def translate_progress(msg: str, p: float):
+            mapped = int(p * 100)
+            ACTIVE_TRANSLATIONS[video_key] = {
+                "status": "running",
+                "step": 3,
+                "progress": min(95, max(68, mapped)),
+                "message": msg,
+                "segments": [],
+            }
+
+        src_for_mt = source_lang if source_lang != "auto" else detected_lang
+        translator = Translator(target_lang=target_lang, source_lang=src_for_mt)
+        translated_segments = translator.translate_segments(
+            raw_segments, progress=translate_progress
+        )
+
+        # 4. Ghi file SRT
+        srt_path = target_p.parent / f"{target_p.stem}_vi.srt"
+        write_srt(translated_segments, srt_path, use_translated=True)
+
+        formatted_segments = [
+            {
+                "id": s.index,
+                "start": round(s.start, 2),
+                "end": round(s.end, 2),
+                "text": s.translated or s.text,
+            }
+            for s in translated_segments
+        ]
+
+        ACTIVE_TRANSLATIONS[video_key] = {
+            "status": "completed",
+            "step": 3,
+            "progress": 100,
+            "message": f"Dịch thành công {len(formatted_segments)} đoạn hội thoại!",
+            "segments": formatted_segments,
+            "detected_language": detected_lang,
+        }
+
+        return {
+            "success": True,
+            "message": f"Đã nhận diện và dịch thành công {len(formatted_segments)} câu!",
+            "detected_language": detected_lang,
+            "segments": formatted_segments,
+            "count": len(formatted_segments),
+            "srt_path": str(srt_path),
+        }
+    except Exception as e:
+        ACTIVE_TRANSLATIONS[video_key] = {
+            "status": "error",
+            "step": 1,
+            "progress": 0,
+            "message": f"Lỗi dịch thuật: {e}",
+            "segments": [],
+        }
+        raise
+
+
+@router.post("/auto-translate")
+async def auto_translate_video(req: AutoTranslateRequest) -> dict[str, Any]:
+    """Tự động trích xuất âm thanh, nhận diện Whisper và dịch phụ đề bằng Gemini/Google."""
+    try:
+        res = await asyncio.to_thread(_do_auto_translate, req)
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[studio auto-translate] Lỗi: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/translate-progress")
+def get_translate_progress(video_path: str = Query(..., description="Đường dẫn file video")) -> dict[str, Any]:
+    """Kiểm tra tiến độ dịch thuật theo thời gian thực."""
+    try:
+        target_p = resolve_video_path(video_path)
+        video_key = str(target_p)
+    except Exception:
+        video_key = video_path
+
+    info = ACTIVE_TRANSLATIONS.get(video_key)
+    if not info:
+        return {"status": "idle", "step": 0, "progress": 0, "message": "", "segments": []}
+    return info
+
+
+@router.post("/import-srt")
+async def import_srt_file(
+    file: UploadFile = File(...),
+    video_path: str = Form(...),
+) -> dict[str, Any]:
+    """Tải lên file .srt từ máy tính và gán vào video hiện tại."""
+    if not file.filename.lower().endswith(".srt"):
+        raise HTTPException(status_code=400, detail="Chỉ hỗ trợ file phụ đề định dạng .srt")
+
+    try:
+        target_p = resolve_video_path(video_path)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy video: {video_path}")
+
+    if not target_p.exists() or not target_p.is_file():
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy video: {video_path}")
+
+    # Ghi nội dung vào file {stem}_vi.srt cạnh video
+    dest_srt = target_p.parent / f"{target_p.stem}_vi.srt"
+    content = await file.read()
+    dest_srt.write_bytes(content)
+
+    # Đọc lại và trả về segments
+    try:
+        segs = read_srt(dest_srt)
+        formatted_segments = [
+            {
+                "id": s.index,
+                "start": round(s.start, 2),
+                "end": round(s.end, 2),
+                "text": s.translated or s.text,
+            }
+            for s in segs
+        ]
+        return {
+            "success": True,
+            "message": f"Đã nhập thành công {len(formatted_segments)} đoạn phụ đề!",
+            "segments": formatted_segments,
+            "count": len(formatted_segments),
+            "srt_path": str(dest_srt),
+        }
+    except Exception as e:
+        print(f"[studio import-srt] Lỗi đọc srt: {e}")
+        raise HTTPException(status_code=400, detail=f"Không thể đọc file SRT: {e}")
 
 
 @router.post("/upload-logo")

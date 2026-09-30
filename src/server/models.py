@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DriveInfo(BaseModel):
@@ -93,3 +93,13 @@ class VideoItemResponse(BaseModel):
     suggest_remix: bool = False
     status: str = "inbox"
     source_type: str = "downloaded"  # "downloaded" | "local"
+
+
+class AutoTranslateRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    video_path: str
+    source_lang: str = "zh-CN"
+    target_lang: str = "vi"
+    model_size: str | None = None
+    device: str | None = None

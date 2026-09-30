@@ -61,6 +61,16 @@ export default function StudioScreen({
   const [magnetEnabled, setMagnetEnabled] = useState(true);
   const [isScrubbing, setIsScrubbing] = useState(false);
 
+  // Auto-translate & Subtitle import state
+  const [isTranslating, setIsTranslating] = useState(false);
+  const [translateStep, setTranslateStep] = useState(1);
+  const [translateProgress, setTranslateProgress] = useState(0);
+  const [translateMessage, setTranslateMessage] = useState('');
+  const [translateError, setTranslateError] = useState(null);
+  const [translateSuccessData, setTranslateSuccessData] = useState(null);
+  const srtInputRef = useRef(null);
+  const translatePollTimerRef = useRef(null);
+
   // Export progress modal
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
@@ -387,6 +397,98 @@ export default function StudioScreen({
       setActiveSegmentId(null);
       showToast('✓ Đã xóa sạch toàn bộ phụ đề!', 'info');
     }
+  };
+
+  // Dọn dẹp timer polling khi unmount
+  useEffect(() => {
+    return () => {
+      if (translatePollTimerRef.current) clearInterval(translatePollTimerRef.current);
+    };
+  }, []);
+
+  const handleStartAutoTranslate = async () => {
+    if (!selectedVideo?.path) {
+      showToast('Chưa chọn video nào để dịch!', 'warning');
+      return;
+    }
+
+    setIsTranslating(true);
+    setTranslateStep(1);
+    setTranslateProgress(10);
+    setTranslateMessage('Đang trích xuất luồng âm thanh WAV từ video...');
+    setTranslateError(null);
+    setTranslateSuccessData(null);
+
+    // Bắt đầu vòng lặp polling tiến độ từ server
+    if (translatePollTimerRef.current) clearInterval(translatePollTimerRef.current);
+    translatePollTimerRef.current = setInterval(async () => {
+      const prog = await api.getTranslateProgress(selectedVideo.path);
+      if (prog && prog.status === 'running') {
+        if (prog.step) setTranslateStep(prog.step);
+        if (prog.progress) setTranslateProgress(prog.progress);
+        if (prog.message) setTranslateMessage(prog.message);
+      }
+    }, 500);
+
+    try {
+      showToast('🚀 Khởi chạy chu trình Dịch AI (Whisper + Gemini)...', 'info');
+      const res = await api.autoTranslate({
+        video_path: selectedVideo.path,
+        source_lang: 'zh-CN',
+        target_lang: 'vi',
+      });
+
+      if (translatePollTimerRef.current) {
+        clearInterval(translatePollTimerRef.current);
+        translatePollTimerRef.current = null;
+      }
+
+      if (res && res.success) {
+        setTranslateProgress(100);
+        setTranslateStep(3);
+        setTranslateMessage(res.message || 'Dịch thuật hoàn tất!');
+        setTranslateSuccessData(res);
+
+        if (res.segments && res.segments.length > 0) {
+          setSegments(res.segments);
+          setActiveSegmentId(res.segments[0].id);
+          showToast(`✓ Đã nhận diện & dịch thành công ${res.segments.length} câu! Phụ đề đã nạp vào Studio.`, 'success');
+        } else {
+          showToast('ℹ️ Không phát hiện giọng nói nào trong video.', 'info');
+        }
+      } else {
+        throw new Error(res?.detail || 'Không thể hoàn thành dịch thuật AI');
+      }
+    } catch (err) {
+      if (translatePollTimerRef.current) {
+        clearInterval(translatePollTimerRef.current);
+        translatePollTimerRef.current = null;
+      }
+      setTranslateError(err.message || 'Lỗi xử lý dịch thuật');
+      showToast(`❌ Lỗi dịch AI: ${err.message}`, 'error');
+    }
+  };
+
+  const handleImportSrt = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!selectedVideo?.path) {
+      showToast('Vui lòng chọn video trước khi nạp file phụ đề!', 'warning');
+      return;
+    }
+
+    showToast(`Đang nạp file phụ đề: ${file.name}...`, 'info');
+    const res = await api.importSrt(file, selectedVideo.path);
+    if (res && res.success && res.segments) {
+      setSegments(res.segments);
+      if (res.segments.length > 0) {
+        setActiveSegmentId(res.segments[0].id);
+      }
+      showToast(`✓ Đã nạp thành công ${res.segments.length} câu phụ đề từ file ${file.name}!`, 'success');
+    } else {
+      showToast('❌ Không thể nạp file phụ đề SRT!', 'error');
+    }
+    e.target.value = '';
   };
 
   const startExportNVENC = async () => {
@@ -727,6 +829,67 @@ export default function StudioScreen({
           {/* TAB 1: SUBTITLE & BOX STYLE */}
           {activeInspectorTab === 'tab-style' && (
             <div className="p-4 space-y-4 text-xs">
+              
+              {/* AI Auto-Translation Banner / Status */}
+              {segments.length === 0 ? (
+                <div className="bg-gradient-to-br from-sky-950/70 via-slate-900 to-indigo-950/70 p-3.5 rounded-xl border border-sky-500/30 shadow-lg space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-sky-300 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span>DỊCH PHỤ ĐỀ TỰ ĐỘNG</span>
+                    </span>
+                    <span className="text-[9px] bg-sky-500/20 text-sky-300 px-1.5 py-0.5 rounded font-mono">Whisper + Gemini</span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Video hiện tại chưa có phụ đề. Bấm để AI tự động bóc băng hội thoại tiếng Trung/gốc và dịch chuẩn sang tiếng Việt.
+                  </p>
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={handleStartAutoTranslate}
+                      disabled={!selectedVideo || isTranslating}
+                      className="flex-1 py-2 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold text-xs rounded-lg shadow-md shadow-sky-500/30 flex items-center justify-center gap-1.5 transition active:scale-95 disabled:opacity-40 cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Kích Hoạt Dịch AI</span>
+                    </button>
+                    <button
+                      onClick={() => srtInputRef.current?.click()}
+                      disabled={!selectedVideo}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold rounded-lg border border-slate-700 transition cursor-pointer"
+                      title="Nhập file SRT có sẵn từ máy"
+                    >
+                      📂 Nhập SRT
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-300">
+                    <span className="text-emerald-400 font-bold">✓</span>
+                    <span>Đã có <b className="text-white font-mono">{segments.length}</b> câu phụ đề</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={handleStartAutoTranslate}
+                      disabled={!selectedVideo || isTranslating}
+                      className="px-2 py-1 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 hover:text-sky-300 rounded border border-sky-500/30 text-[10px] font-bold flex items-center gap-1 transition"
+                      title="Dịch lại toàn bộ video bằng AI"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>Dịch lại</span>
+                    </button>
+                    <button
+                      onClick={() => srtInputRef.current?.click()}
+                      disabled={!selectedVideo}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] font-semibold border border-slate-700 transition"
+                      title="Nạp đè file SRT khác"
+                    >
+                      📂 Nạp SRT
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                   Nội dung câu phụ đề hiện tại:
@@ -1114,6 +1277,29 @@ export default function StudioScreen({
           
           {/* Subtitle Tools */}
           <div className="flex items-center gap-1.5">
+            {/* AI Auto-Translate & SRT Import */}
+            <button
+              onClick={handleStartAutoTranslate}
+              disabled={!selectedVideo || isTranslating}
+              className="flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-sky-600 via-indigo-600 to-purple-600 hover:from-sky-500 hover:to-indigo-500 text-white font-bold rounded-md shadow-sm shadow-sky-500/30 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              title="Tự động bóc băng Whisper CUDA và dịch Gemini sang tiếng Việt"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+              <span className="font-extrabold text-[11px]">Dịch AI</span>
+            </button>
+
+            <button
+              onClick={() => srtInputRef.current?.click()}
+              disabled={!selectedVideo}
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white rounded-md border border-slate-700 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              title="Nhập file .SRT từ máy tính"
+            >
+              <span>📂</span>
+              <span className="font-medium text-[11px]">Nhập SRT</span>
+            </button>
+
+            <div className="w-px h-4 bg-slate-800 mx-0.5"></div>
+
             <button
               onClick={splitCurrentSegment}
               disabled={!activeSegment}
@@ -1322,9 +1508,38 @@ export default function StudioScreen({
             {/* Subtitle Track */}
             <div className="h-10 border-b border-slate-800/80 bg-slate-950/40 relative px-1 py-1 flex items-center">
               {segments.length === 0 ? (
-                <div className="absolute inset-0 flex items-center justify-center text-[10px] text-slate-500 italic pointer-events-none">
-                  Chưa có phụ đề nào (Video không sub hoặc chế độ Chỉ Lách BQ) • Bấm [+ Thêm câu] để tạo
-                </div>
+                selectedVideo ? (
+                  <div className="absolute inset-0 flex items-center justify-between px-3 bg-gradient-to-r from-sky-950/80 via-slate-900/90 to-indigo-950/80 border border-dashed border-sky-500/40 rounded-lg z-20">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+                      <div className="text-left">
+                        <span className="text-[11px] font-bold text-sky-200">Video này chưa có phụ đề tiếng Việt</span>
+                        <span className="text-[10px] text-slate-400 ml-2 hidden md:inline">• Bấm để Whisper CUDA bóc băng & Gemini dịch chuẩn</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 pointer-events-auto">
+                      <button
+                        onClick={handleStartAutoTranslate}
+                        disabled={isTranslating}
+                        className="px-2.5 py-1 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold text-[11px] rounded-md shadow-md flex items-center gap-1 transition active:scale-95 cursor-pointer"
+                      >
+                        <Sparkles className="w-3 h-3 text-amber-300" />
+                        <span>Kích Hoạt Dịch AI</span>
+                      </button>
+                      <button
+                        onClick={() => srtInputRef.current?.click()}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-medium rounded-md border border-slate-700 transition cursor-pointer"
+                        title="Nạp file .SRT có sẵn từ máy"
+                      >
+                        📂 Nhập SRT
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center text-[10px] text-slate-500 italic pointer-events-none">
+                    Chưa có video được nạp • Vui lòng chọn video để bắt đầu dịch & biên tập
+                  </div>
+                )
               ) : (
                 segments.map(seg => {
                   const isAct = seg.id === activeSegmentId;
@@ -1483,6 +1698,123 @@ export default function StudioScreen({
           </div>
         </div>
       )}
+
+      {/* 5. AI TRANSLATE PROGRESS MODAL */}
+      {isTranslating && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center animate-in fade-in duration-200">
+          <div className="w-[540px] bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-extrabold text-base text-white flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-sky-400 animate-pulse" /> Chu Trình Dịch Thuật AI Tự Động
+              </h3>
+              <span className="font-mono text-sm font-bold text-sky-400">{translateProgress}%</span>
+            </div>
+
+            {/* 3-Step Visual Badges */}
+            <div className="grid grid-cols-3 gap-2 py-1">
+              <div className={`p-2.5 rounded-xl border text-center transition ${
+                translateStep === 1 
+                  ? 'bg-sky-500/20 border-sky-400 text-sky-300 ring-1 ring-sky-400' 
+                  : translateStep > 1 
+                    ? 'bg-slate-800/80 border-emerald-500/50 text-emerald-400' 
+                    : 'bg-slate-950/60 border-slate-800 text-slate-500'
+              }`}>
+                <div className="text-base mb-1">{translateStep > 1 ? '✓' : '🎵'}</div>
+                <div className="text-[11px] font-bold">1. Tách Audio</div>
+                <div className="text-[9px] text-slate-400">WAV PCM 16kHz</div>
+              </div>
+
+              <div className={`p-2.5 rounded-xl border text-center transition ${
+                translateStep === 2 
+                  ? 'bg-sky-500/20 border-sky-400 text-sky-300 ring-1 ring-sky-400' 
+                  : translateStep > 2 
+                    ? 'bg-slate-800/80 border-emerald-500/50 text-emerald-400' 
+                    : 'bg-slate-950/60 border-slate-800 text-slate-500'
+              }`}>
+                <div className="text-base mb-1">{translateStep > 2 ? '✓' : '🎙️'}</div>
+                <div className="text-[11px] font-bold">2. Bóc Băng</div>
+                <div className="text-[9px] text-slate-400">Whisper CUDA</div>
+              </div>
+
+              <div className={`p-2.5 rounded-xl border text-center transition ${
+                translateStep === 3 && translateProgress < 100
+                  ? 'bg-sky-500/20 border-sky-400 text-sky-300 ring-1 ring-sky-400' 
+                  : translateProgress === 100 
+                    ? 'bg-slate-800/80 border-emerald-500/50 text-emerald-400' 
+                    : 'bg-slate-950/60 border-slate-800 text-slate-500'
+              }`}>
+                <div className="text-base mb-1">{translateProgress === 100 ? '✓' : '🌐'}</div>
+                <div className="text-[11px] font-bold">3. Dịch Ngữ Nghĩa</div>
+                <div className="text-[9px] text-slate-400">Gemini Flash</div>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            <div className="w-full h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+              <div
+                style={{ width: `${translateProgress}%` }}
+                className="h-full bg-gradient-to-r from-sky-500 via-indigo-500 to-emerald-400 transition-all duration-300 rounded-full"
+              />
+            </div>
+
+            {translateError ? (
+              <div className="bg-rose-950/60 p-3 rounded-xl border border-rose-800/80 text-xs font-mono text-rose-300 space-y-1">
+                <p className="font-bold">❌ Gặp sự cố trong quá trình dịch AI:</p>
+                <p>{translateError}</p>
+              </div>
+            ) : (
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1.5">
+                <p className="text-sky-300 flex items-center gap-2">
+                  <span className="inline-block w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>
+                  <span>{translateMessage || 'Đang thực thi chu trình dịch thuật...'}</span>
+                </p>
+                <p className="text-slate-400">• Video: <span className="text-white font-semibold">{selectedVideo?.filename}</span></p>
+                <p className="text-slate-400">• Tệp phụ đề đầu ra: <span className="text-emerald-400 font-semibold">{selectedVideo?.filename?.replace(/\.[^/.]+$/, "")}_vi.srt</span></p>
+                {translateSuccessData && (
+                  <p className="text-emerald-400 font-bold pt-1 border-t border-slate-800/80 mt-1">
+                    🎉 Hoàn tất: Đã dịch {translateSuccessData.count || 0} câu phụ đề chuẩn xác!
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              {translateProgress < 100 && !translateError ? (
+                <span className="text-xs text-slate-400 mr-auto flex items-center gap-1.5 font-mono">
+                  <span className="animate-spin text-sky-400">⏳</span> Vui lòng chờ trong giây lát...
+                </span>
+              ) : null}
+
+              {translateError && (
+                <button
+                  onClick={() => setIsTranslating(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-semibold text-xs transition"
+                >
+                  Đóng
+                </button>
+              )}
+
+              {translateProgress === 100 && (
+                <button
+                  onClick={() => setIsTranslating(false)}
+                  className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-sky-500 hover:opacity-95 text-slate-950 font-extrabold rounded-xl shadow-lg shadow-emerald-500/20 text-xs flex items-center gap-1.5 transition active:scale-95"
+                >
+                  <span>✓</span> Bắt Đầu Biên Tập Ngay
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden input for SRT import */}
+      <input
+        ref={srtInputRef}
+        type="file"
+        accept=".srt"
+        onChange={handleImportSrt}
+        className="hidden"
+      />
 
     </div>
   );

@@ -116,6 +116,31 @@ export const uploadLogo = async (file) => {
 export const deleteLogo = () => apiFetch('/api/studio/logo', {
   method: 'DELETE'
 });
+export const autoTranslate = (data) => apiFetch('/api/studio/auto-translate', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const getTranslateProgress = (videoPath) =>
+  apiFetch(`/api/studio/translate-progress?video_path=${encodeURIComponent(videoPath)}`);
+export const importSrt = async (file, videoPath) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('video_path', videoPath);
+  try {
+    const res = await fetch('/api/studio/import-srt', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Lỗi tải file phụ đề' }));
+      throw new Error(err.detail || 'Lỗi tải file phụ đề');
+    }
+    return await res.json();
+  } catch (err) {
+    console.warn('Import SRT error:', err);
+    return null;
+  }
+};
 
 // 4. Phân phối Đa nền tảng
 export const getPublishSubfolders = () =>
