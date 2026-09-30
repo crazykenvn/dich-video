@@ -21,13 +21,6 @@ export default function App() {
         showToast('✓ Đã kết nối FastAPI Backend thành công (NVENC GPU Ready)', 'success');
       }
     });
-
-    // Tự động nạp video đầu tiên nếu có để Studio sẵn sàng ngay lập tức
-    api.getVideos('all', 'all').then(vids => {
-      if (vids && vids.length > 0 && !selectedVideo) {
-        setSelectedVideo(vids[0]);
-      }
-    });
   }, []);
 
   const showToast = (message, type = 'info') => {
@@ -68,9 +61,11 @@ export default function App() {
         {activeScreen === 'studio' && (
           <StudioScreen 
             selectedVideo={selectedVideo} 
+            setSelectedVideo={setSelectedVideo}
             workflowMode={workflowMode} 
             setWorkflowMode={setWorkflowMode} 
             onGoToPublishing={() => setActiveScreen('publishing')} 
+            onGoToIngestion={() => setActiveScreen('ingestion')}
             showToast={showToast} 
           />
         )}

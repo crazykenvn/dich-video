@@ -53,3 +53,29 @@ def write_bilingual_srt(segments: list[Segment], path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(srt.compose(items), encoding="utf-8")
     return path
+
+
+def read_srt(path: Path) -> list[Segment]:
+    """Đọc file SRT và trả về danh sách các đối tượng Segment."""
+    if not path.exists():
+        return []
+    try:
+        content = path.read_text(encoding="utf-8")
+        subs = list(srt.parse(content))
+        segments = []
+        for s in subs:
+            start_sec = s.start.total_seconds()
+            end_sec = s.end.total_seconds()
+            text = s.content.strip()
+            segments.append(Segment(
+                index=s.index or (len(segments) + 1),
+                start=start_sec,
+                end=end_sec,
+                text=text,
+                translated=text,
+            ))
+        return segments
+    except Exception as e:
+        print(f"[subtitles] Lỗi parse srt {path}: {e}")
+        return []
+

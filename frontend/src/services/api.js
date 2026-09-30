@@ -39,7 +39,7 @@ export const openFolder = (path) => apiFetch('/api/fs/open-folder', {
   body: JSON.stringify({ path })
 });
 
-// 2. Video Nguồn
+// 2. Video Nguồn & Quét Máy
 export const getSources = () => apiFetch('/api/videos/sources');
 export const getVideos = (sourceType = 'all', sourceId = 'all') =>
   apiFetch(`/api/videos/list?source_type=${sourceType}&source_id=${encodeURIComponent(sourceId)}`);
@@ -51,6 +51,30 @@ export const scanLocal = (path, sourceName = '') => apiFetch('/api/videos/scan-l
   method: 'POST',
   body: JSON.stringify({ path, source_name: sourceName })
 });
+export const pickFolder = () => apiFetch('/api/videos/pick-folder', {
+  method: 'POST'
+});
+export const pickFiles = () => apiFetch('/api/videos/pick-files', {
+  method: 'POST'
+});
+export const uploadVideo = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const res = await fetch('/api/videos/upload', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Lỗi tải video lên' }));
+      throw new Error(err.detail || 'Lỗi tải video lên');
+    }
+    return await res.json();
+  } catch (err) {
+    console.warn('Upload video error:', err);
+    return null;
+  }
+};
 
 // 3. Studio & Preview
 export const getVideoStreamUrl = (videoPath) =>
@@ -63,6 +87,8 @@ export const getPreviewFrame = (videoPath, timestampSec = 1.0) =>
   });
 export const getTimelineFrames = (videoPath, count = 16) =>
   apiFetch(`/api/studio/timeline-frames?video_path=${encodeURIComponent(videoPath)}&count=${count}`);
+export const getSubtitles = (videoPath) =>
+  apiFetch(`/api/studio/subtitles?video_path=${encodeURIComponent(videoPath)}`);
 export const getLabPresets = () => apiFetch('/api/studio/presets');
 export const exportVideo = (data) => apiFetch('/api/studio/export', {
   method: 'POST',

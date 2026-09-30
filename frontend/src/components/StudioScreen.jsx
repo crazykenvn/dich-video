@@ -8,18 +8,20 @@ import * as api from '../services/api';
 
 export default function StudioScreen({ 
   selectedVideo, 
+  setSelectedVideo,
   workflowMode, 
   setWorkflowMode, 
   onGoToPublishing, 
+  onGoToIngestion,
   showToast 
 }) {
   // Video & Playhead state
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentSeconds, setCurrentSeconds] = useState(3.15);
-  const [totalSeconds, setTotalSeconds] = useState(15.0);
-  const [videoDims, setVideoDims] = useState('1080 × 1920 px (Shorts/TikTok)');
+  const [currentSeconds, setCurrentSeconds] = useState(0);
+  const [totalSeconds, setTotalSeconds] = useState(0);
+  const [videoDims, setVideoDims] = useState('');
   const [aspectRatio, setAspectRatio] = useState('9:16');
-  const [previewFrameUrl, setPreviewFrameUrl] = useState('/preview_sample.jpg');
+  const [previewFrameUrl, setPreviewFrameUrl] = useState(null);
 
   // Subtitle Bounding Box state
   const [marginV, setMarginV] = useState(38); // px from bottom
@@ -34,13 +36,8 @@ export default function StudioScreen({
   const [timelineFrames, setTimelineFrames] = useState([]);
 
   // Subtitle Segments
-  const [segments, setSegments] = useState([
-    { id: 1, start: 0, end: 3.2, text: 'ở nhà vào 1 ngày cuối tuần như này saoooo🐰' },
-    { id: 2, start: 3.2, end: 7.5, text: 'cùng mình dọn dẹp và chuẩn bị bữa tối chill nha' },
-    { id: 3, start: 7.5, end: 11.8, text: 'tự động dịch tiếng Trung và đè hardsub siêu nét' },
-    { id: 4, start: 11.8, end: 15.0, text: 'lách bản quyền 100% với card đồ họa RTX 3060 NVENC' },
-  ]);
-  const [activeSegmentId, setActiveSegmentId] = useState(1);
+  const [segments, setSegments] = useState([]);
+  const [activeSegmentId, setActiveSegmentId] = useState(null);
 
   // Audio & Inspector state
   const [isOrigMuted, setIsOrigMuted] = useState(false);
@@ -83,14 +80,44 @@ export default function StudioScreen({
   useEffect(() => {
     if (selectedVideo?.path) {
       loadVideoDetails(selectedVideo.path);
+      // Nạp phụ đề srt có sẵn đi kèm nếu có (hoặc để mảng rỗng)
+      api.getSubtitles(selectedVideo.path).then(subs => {
+        if (subs && Array.isArray(subs) && subs.length > 0) {
+          setSegments(subs);
+          setActiveSegmentId(subs[0].id);
+        } else {
+          setSegments([]);
+          setActiveSegmentId(null);
+        }
+      });
       if (videoRef.current) {
         videoRef.current.currentTime = 0;
         videoRef.current.pause();
       }
       setIsPlaying(false);
       setCurrentSeconds(0);
+    } else {
+      // Khi không có video: đưa toàn bộ trạng thái về trắng/trống hoàn toàn
+      setSegments([]);
+      setActiveSegmentId(null);
+      setTimelineFrames([]);
+      setPreviewFrameUrl(null);
+      setVideoDims('');
+      setTotalSeconds(0);
+      setCurrentSeconds(0);
+      setIsPlaying(false);
     }
   }, [selectedVideo]);
+
+  const handlePickVideoDirect = async () => {
+    showToast('Đang mở hộp thoại Windows Explorer để chọn file video...', 'info');
+    const res = await api.pickFiles();
+    if (res && res.success && res.videos?.length > 0) {
+      const v = res.videos[0];
+      if (setSelectedVideo) setSelectedVideo(v);
+      showToast(`✓ Đã nạp video <b>${v.filename}</b> vào Studio!`, 'success');
+    }
+  };
 
   // Nạp thông tin logo thương hiệu đã lưu vĩnh viễn lúc mở Studio
   useEffect(() => {
@@ -192,9 +219,10 @@ export default function StudioScreen({
     }
   }, [currentSeconds, segments]);
 
-  const activeSegment = segments.find(s => s.id === activeSegmentId) || segments[0];
+  const activeSegment = segments.find(s => s.id === activeSegmentId) || (segments.length > 0 ? segments[0] : null);
 
   const updateActiveText = (text) => {
+    if (!activeSegmentId) return;
     setSegments(prev => prev.map(s => s.id === activeSegmentId ? { ...s, text } : s));
   };
 
@@ -328,7 +356,7 @@ export default function StudioScreen({
   const addNewSegment = () => {
     const newId = Date.now();
     const start = +currentSeconds.toFixed(1);
-    const end = Math.min(totalSeconds, start + 3.0);
+    const end = totalSeconds > 0 ? Math.min(totalSeconds, start + 3.0) : start + 3.0;
     const newSeg = {
       id: newId,
       start,
@@ -341,13 +369,24 @@ export default function StudioScreen({
   };
 
   const deleteActiveSegment = () => {
-    if (segments.length <= 1) {
-      showToast('Phải giữ lại ít nhất 1 câu phụ đề!', 'warning');
-      return;
+    if (segments.length === 0) return;
+    const nextSegments = segments.filter(s => s.id !== activeSegmentId);
+    setSegments(nextSegments);
+    if (nextSegments.length > 0) {
+      setActiveSegmentId(nextSegments[0].id);
+    } else {
+      setActiveSegmentId(null);
     }
-    setSegments(prev => prev.filter(s => s.id !== activeSegmentId));
-    setActiveSegmentId(segments[0].id);
-    showToast('✓ Đã xóa câu phụ đề được chọn!', 'info');
+    showToast('✓ Đã xóa câu phụ đề!', 'info');
+  };
+
+  const clearAllSegments = () => {
+    if (segments.length === 0) return;
+    if (window.confirm('Bạn có chắc muốn xóa TOÀN BỘ phụ đề không?')) {
+      setSegments([]);
+      setActiveSegmentId(null);
+      showToast('✓ Đã xóa sạch toàn bộ phụ đề!', 'info');
+    }
   };
 
   const startExportNVENC = async () => {
@@ -401,7 +440,7 @@ export default function StudioScreen({
     }
   };
 
-  const playheadPercent = (currentSeconds / totalSeconds) * 100;
+  const playheadPercent = totalSeconds > 0 ? (currentSeconds / totalSeconds) * 100 : 0;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-950 select-none">
@@ -410,14 +449,16 @@ export default function StudioScreen({
       <div className="h-10 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between text-xs shrink-0">
         <div className="flex items-center gap-3">
           <span className="font-bold text-white flex items-center gap-1.5 font-display truncate max-w-sm">
-            <Video className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-            <span className="truncate">{selectedVideo ? selectedVideo.filename : 'ig_hoai.theu27_story_001_video.mp4'}</span>
+            <Video className={`w-3.5 h-3.5 shrink-0 ${selectedVideo ? 'text-sky-400' : 'text-slate-600'}`} />
+            <span className="truncate">
+              {selectedVideo ? selectedVideo.filename : <span className="text-slate-500 italic font-normal">Chưa chọn video nào</span>}
+            </span>
           </span>
           <span className="font-mono text-[10px] bg-slate-950 text-slate-400 px-2 py-0.5 rounded border border-slate-800">
-            {videoDims}
+            {selectedVideo && videoDims ? videoDims : '-- × -- px'}
           </span>
           <span className="font-mono text-[10px] bg-emerald-500/10 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/20">
-            ready_to_upload/{selectedVideo?.subfolder || 'hoai_theu_27'}/
+            ready_to_upload/{selectedVideo?.subfolder || '--'}/
           </span>
         </div>
 
@@ -503,14 +544,38 @@ export default function StudioScreen({
                 onEnded={() => setIsPlaying(false)}
               />
             ) : (
-              <div 
-                style={{ backgroundImage: `url(${previewFrameUrl})` }}
-                className="absolute inset-0 bg-cover bg-center"
-              />
+              /* Trạng thái trống khi chưa có video nào được chọn */
+              <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center text-slate-400 bg-slate-950/95 z-20 space-y-3">
+                <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-600 shadow-inner">
+                  <Video className="w-7 h-7 text-slate-500" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-white mb-1">Chưa có video được chọn</h3>
+                  <p className="text-[11px] text-slate-500 max-w-[200px] leading-relaxed">
+                    Chọn video từ tab Nguồn hoặc mở trực tiếp từ máy tính.
+                  </p>
+                </div>
+                <div className="space-y-1.5 w-full max-w-[200px] pt-1">
+                  <button
+                    onClick={handlePickVideoDirect}
+                    className="w-full py-1.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-[11px] rounded-lg shadow-md transition flex items-center justify-center gap-1 active:scale-95 pointer-events-auto"
+                  >
+                    <Upload className="w-3.5 h-3.5" /> Mở Video Máy Tính
+                  </button>
+                  {onGoToIngestion && (
+                    <button
+                      onClick={onGoToIngestion}
+                      className="w-full py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 font-semibold text-[11px] rounded-lg transition flex items-center justify-center gap-1 active:scale-95 pointer-events-auto"
+                    >
+                      ← Tab Thu Thập Nguồn
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
 
             {/* Center Play Button Overlay when paused */}
-            {!isPlaying && (
+            {selectedVideo?.path && !isPlaying && (
               <div 
                 className="absolute inset-0 flex items-center justify-center pointer-events-none z-10"
               >
@@ -529,10 +594,10 @@ export default function StudioScreen({
             )}
 
             {/* Simulated Anti-detect Filter Layers */}
-            {activeCombo === 'stealth' && <div className="absolute inset-0 fx-grain pointer-events-none opacity-40"></div>}
-            {activeCombo === 'cinema' && <div className="absolute inset-0 fx-vignette pointer-events-none"></div>}
-            {activeCombo === 'crt' && <div className="absolute inset-0 fx-crt pointer-events-none"></div>}
-            {activeCombo === 'fortress' && (
+            {selectedVideo?.path && activeCombo === 'stealth' && <div className="absolute inset-0 fx-grain pointer-events-none opacity-40"></div>}
+            {selectedVideo?.path && activeCombo === 'cinema' && <div className="absolute inset-0 fx-vignette pointer-events-none"></div>}
+            {selectedVideo?.path && activeCombo === 'crt' && <div className="absolute inset-0 fx-crt pointer-events-none"></div>}
+            {selectedVideo?.path && activeCombo === 'fortress' && (
               <>
                 <div className="absolute inset-0 fx-vignette pointer-events-none"></div>
                 <div className="absolute inset-0 fx-mesh pointer-events-none opacity-60"></div>
@@ -540,7 +605,7 @@ export default function StudioScreen({
             )}
 
             {/* Watermark overlay */}
-            {watermarkEnabled && (
+            {selectedVideo?.path && watermarkEnabled && (
               <div className="absolute top-3 right-3 pointer-events-none select-none z-10 flex items-center justify-end">
                 {watermarkType === 'image' && watermarkLogoUrl ? (
                   <img
@@ -557,7 +622,7 @@ export default function StudioScreen({
             )}
 
             {/* SUBTITLE BOUNDING BOX (KÉO THẢ & CO GIÃN 8 HANDLE) */}
-            {workflowMode === 'translate' && (
+            {selectedVideo?.path && workflowMode === 'translate' && activeSegment && (
               <div
                 onMouseDown={(e) => {
                   if (e.target.classList.contains('handle')) return;
@@ -669,8 +734,16 @@ export default function StudioScreen({
                 <textarea
                   rows={2}
                   value={activeSegment ? activeSegment.text : ''}
+                  disabled={!activeSegment}
+                  placeholder={
+                    !selectedVideo 
+                      ? "Chưa có video được nạp..." 
+                      : segments.length === 0 
+                        ? "Chưa có câu phụ đề nào. Nhấn [+ Thêm câu] để tạo mới..." 
+                        : "Chọn một câu trên timeline để chỉnh sửa..."
+                  }
                   onChange={(e) => updateActiveText(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-lg p-2 text-xs text-slate-100 outline-none resize-none"
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-lg p-2 text-xs text-slate-100 outline-none resize-none disabled:opacity-40 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -1018,7 +1091,7 @@ export default function StudioScreen({
           <div className="p-4 border-t border-slate-800 mt-auto bg-slate-950/90 space-y-2">
             <div className="text-[11px] text-slate-400 flex items-center justify-between">
               <span>Xuất vào subfolder:</span>
-              <span className="font-mono text-emerald-400 font-bold">ready_to_upload/{selectedVideo?.subfolder || 'hoai_theu_27'}/</span>
+              <span className="font-mono text-emerald-400 font-bold">ready_to_upload/{selectedVideo?.subfolder || '--'}/</span>
             </div>
             <button
               onClick={startExportNVENC}
@@ -1043,7 +1116,8 @@ export default function StudioScreen({
           <div className="flex items-center gap-1.5">
             <button
               onClick={splitCurrentSegment}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-[#00f2fe] rounded-md border border-slate-700 transition active:scale-95"
+              disabled={!activeSegment}
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-[#00f2fe] rounded-md border border-slate-700 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <span>✂️</span>
               <span className="font-medium text-[11px]">Tách câu</span>
@@ -1051,7 +1125,8 @@ export default function StudioScreen({
 
             <button
               onClick={addNewSegment}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-emerald-400 rounded-md border border-slate-700 transition active:scale-95"
+              disabled={!selectedVideo}
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-emerald-400 rounded-md border border-slate-700 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <span>➕</span>
               <span className="font-medium text-[11px]">Thêm câu</span>
@@ -1059,10 +1134,22 @@ export default function StudioScreen({
 
             <button
               onClick={deleteActiveSegment}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-rose-400 rounded-md border border-slate-700 transition active:scale-95"
+              disabled={!activeSegment}
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-rose-400 rounded-md border border-slate-700 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Xóa câu phụ đề đang chọn"
             >
               <span>🗑️</span>
               <span className="font-medium text-[11px]">Xóa câu</span>
+            </button>
+
+            <button
+              onClick={clearAllSegments}
+              disabled={segments.length === 0}
+              className="flex items-center gap-1.5 px-2 py-1 bg-slate-800/90 hover:bg-rose-950/60 text-slate-400 hover:text-rose-300 rounded-md border border-slate-700 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Xóa sạch toàn bộ phụ đề"
+            >
+              <span>🧹</span>
+              <span className="font-medium text-[11px]">Xóa tất cả</span>
             </button>
 
             <div className="w-px h-4 bg-slate-800 mx-1"></div>
@@ -1234,93 +1321,95 @@ export default function StudioScreen({
 
             {/* Subtitle Track */}
             <div className="h-10 border-b border-slate-800/80 bg-slate-950/40 relative px-1 py-1 flex items-center">
-              {segments.map(seg => {
-                const isAct = seg.id === activeSegmentId;
-                const leftPct = (seg.start / totalSeconds) * 100;
-                const widthPct = ((seg.end - seg.start) / totalSeconds) * 100;
+              {segments.length === 0 ? (
+                <div className="absolute inset-0 flex items-center justify-center text-[10px] text-slate-500 italic pointer-events-none">
+                  Chưa có phụ đề nào (Video không sub hoặc chế độ Chỉ Lách BQ) • Bấm [+ Thêm câu] để tạo
+                </div>
+              ) : (
+                segments.map(seg => {
+                  const isAct = seg.id === activeSegmentId;
+                  const leftPct = totalSeconds > 0 ? (seg.start / totalSeconds) * 100 : 0;
+                  const widthPct = totalSeconds > 0 ? ((seg.end - seg.start) / totalSeconds) * 100 : 10;
 
-                return (
-                  <div
-                    key={seg.id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveSegmentId(seg.id);
-                      seekTo(seg.start);
-                    }}
-                    style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, 6)}%` }}
-                    className={`absolute h-8 rounded-lg cursor-pointer transition flex items-center justify-between px-2 text-[10px] truncate ${
-                      isAct
-                        ? 'bg-gradient-to-r from-sky-500 to-blue-600 text-white font-bold border-2 border-white shadow-md'
-                        : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700/90 border border-slate-700'
-                    }`}
-                  >
-                    <span className="truncate">{seg.text}</span>
-                  </div>
-                );
-              })}
+                  return (
+                    <div
+                      key={seg.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveSegmentId(seg.id);
+                        seekTo(seg.start);
+                      }}
+                      style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, 6)}%` }}
+                      className={`absolute h-8 rounded-lg cursor-pointer transition flex items-center justify-between px-2 text-[10px] truncate ${
+                        isAct
+                          ? 'bg-gradient-to-r from-sky-500 to-blue-600 text-white font-bold border-2 border-white shadow-md'
+                          : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700/90 border border-slate-700'
+                      }`}
+                    >
+                      <span className="truncate">{seg.text}</span>
+                    </div>
+                  );
+                })
+              )}
             </div>
 
             {/* Video Clip Strip (16 Frame Filmstrip + Audio Waveform) */}
             <div className="h-20 bg-slate-950/80 relative px-1 py-1.5 flex items-center">
-              <div className="w-full h-full rounded-lg overflow-hidden relative clip-active flex flex-col justify-between cursor-pointer select-none">
-                
-                {/* Clip Title */}
-                <div className="h-4 bg-slate-900/90 border-b border-sky-500/40 px-2 flex items-center justify-between text-[9px] text-slate-300 z-10 backdrop-blur">
-                  <span className="font-semibold text-white flex items-center gap-1 truncate">
-                    <span>🎬</span> {selectedVideo ? selectedVideo.filename : 'ig_hoai.theu27_story_001_video.mp4'}
-                  </span>
-                  <span className="font-mono text-[#00f2fe]">{formatTimecode(totalSeconds)}</span>
-                </div>
+              {selectedVideo ? (
+                <div className="w-full h-full rounded-lg overflow-hidden relative clip-active flex flex-col justify-between cursor-pointer select-none">
+                  
+                  {/* Clip Title */}
+                  <div className="h-4 bg-slate-900/90 border-b border-sky-500/40 px-2 flex items-center justify-between text-[9px] text-slate-300 z-10 backdrop-blur">
+                    <span className="font-semibold text-white flex items-center gap-1 truncate">
+                      <span>🎬</span> {selectedVideo.filename}
+                    </span>
+                    <span className="font-mono text-[#00f2fe]">{formatTimecode(totalSeconds)}</span>
+                  </div>
 
-                {/* 16 Consecutive Frame Thumbnails + Audio Waveform overlay */}
-                <div className="flex-1 flex overflow-hidden bg-slate-900 relative">
-                  <div className="flex w-full h-full">
-                    {timelineFrames.length > 0 ? (
-                      timelineFrames.map((f, idx) => (
-                        <div
-                          key={idx}
-                          style={{ backgroundImage: `url(${f.data_url || previewFrameUrl})` }}
-                          className="h-full flex-1 shrink-0 border-r border-black/40 overflow-hidden film-frame opacity-85 hover:opacity-100 transition relative group/frame"
-                          title={`Khung hình ${idx + 1}/${timelineFrames.length} (${f.timestamp}s)`}
-                        >
-                          <span className="absolute bottom-0.5 left-0.5 bg-black/80 text-[8px] font-mono text-slate-300 px-0.5 rounded opacity-0 group-hover/frame:opacity-100 transition">
-                            {f.timestamp}s
-                          </span>
+                  {/* 16 Consecutive Frame Thumbnails + Audio Waveform overlay */}
+                  <div className="flex-1 flex overflow-hidden bg-slate-900 relative">
+                    <div className="flex w-full h-full">
+                      {timelineFrames.length > 0 ? (
+                        timelineFrames.map((f, idx) => (
+                          <div
+                            key={idx}
+                            style={{ backgroundImage: `url(${f.data_url || previewFrameUrl})` }}
+                            className="h-full flex-1 shrink-0 border-r border-black/40 overflow-hidden film-frame opacity-85 hover:opacity-100 transition relative group/frame"
+                            title={`Khung hình ${idx + 1}/${timelineFrames.length} (${f.timestamp}s)`}
+                          >
+                            <span className="absolute bottom-0.5 left-0.5 bg-black/80 text-[8px] font-mono text-slate-300 px-0.5 rounded opacity-0 group-hover/frame:opacity-100 transition">
+                              {f.timestamp}s
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-500 italic bg-slate-950/60">
+                          Đang tải khung hình filmstrip...
                         </div>
-                      ))
-                    ) : (
-                      [...Array(16)].map((_, idx) => (
-                        <div
-                          key={idx}
-                          style={{ backgroundImage: `url(${previewFrameUrl})` }}
-                          className="h-full flex-1 shrink-0 border-r border-black/40 overflow-hidden film-frame opacity-80"
-                        />
-                      ))
-                    )}
+                      )}
+                    </div>
+
+                    {/* Audio Waveform SVG Overlay */}
+                    <div className="absolute bottom-0 left-0 right-0 h-4 pointer-events-none opacity-60">
+                      <svg className="w-full h-full stroke-cyan-400 fill-none opacity-80" viewBox="0 0 1000 100" preserveAspectRatio="none">
+                        <path d="M0,50 Q25,20 50,50 T100,50 T150,10 T200,50 T250,90 T300,50 T350,30 T400,50 T450,80 T500,50 T550,20 T600,50 T650,70 T700,50 T750,15 T800,50 T850,85 T900,50 T950,30 T1000,50" strokeWidth="2.5" />
+                      </svg>
+                    </div>
                   </div>
 
-                  {/* Audio Waveform SVG Overlay */}
-                  <div className="absolute bottom-0 left-0 right-0 h-4 pointer-events-none opacity-60">
-                    <svg className="w-full h-full text-[#00f2fe]" viewBox="0 0 1000 20" preserveAspectRatio="none">
-                      <path
-                        d="M 0 10 Q 15 2, 30 10 T 60 10 T 90 3 T 120 17 T 150 10 T 180 1 T 210 19 T 240 10 T 270 4 T 300 16 T 330 10 T 360 2 T 390 18 T 420 10 T 450 5 T 480 15 T 510 10 T 540 3 T 570 17 T 600 10 T 630 2 T 660 18 T 690 10 T 720 4 T 750 16 T 780 10 T 810 2 T 840 18 T 870 10 T 900 6 T 930 14 T 960 10 T 1000 10"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                      />
-                    </svg>
+                  {/* Left & Right Cyan Resize Handles */}
+                  <div className="absolute top-0 bottom-0 left-0 w-2.5 bg-[#00f2fe] flex items-center justify-center cursor-ew-resize rounded-l z-20">
+                    <div className="w-0.5 h-3 bg-slate-950 rounded"></div>
+                  </div>
+                  <div className="absolute top-0 bottom-0 right-0 w-2.5 bg-[#00f2fe] flex items-center justify-center cursor-ew-resize rounded-r z-20">
+                    <div className="w-0.5 h-3 bg-slate-950 rounded"></div>
                   </div>
                 </div>
-
-                {/* Left & Right Cyan Resize Handles */}
-                <div className="absolute top-0 bottom-0 left-0 w-2.5 bg-[#00f2fe] flex items-center justify-center cursor-ew-resize rounded-l z-20">
-                  <div className="w-0.5 h-3 bg-slate-950 rounded"></div>
+              ) : (
+                <div className="w-full h-full rounded-lg border border-dashed border-slate-800 flex items-center justify-center text-xs text-slate-600 italic">
+                  Chưa có video được nạp vào dòng thời gian
                 </div>
-                <div className="absolute top-0 bottom-0 right-0 w-2.5 bg-[#00f2fe] flex items-center justify-center cursor-ew-resize rounded-r z-20">
-                  <div className="w-0.5 h-3 bg-slate-950 rounded"></div>
-                </div>
-
-              </div>
+              )}
             </div>
 
           </div>

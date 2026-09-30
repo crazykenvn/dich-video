@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Folder, FolderPlus, Download, HardDrive, Laptop, Globe, Zap, 
-  Search, ExternalLink, RefreshCw, Sparkles, Filter
+  Search, ExternalLink, RefreshCw, Sparkles, Filter, FileVideo, PlusCircle, Upload
 } from 'lucide-react';
 import * as api from '../services/api';
 
@@ -16,8 +16,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
   const [quickUrl, setQuickUrl] = useState('');
   const [targetAccount, setTargetAccount] = useState('general_inbox');
 
-  const folderInputRef = useRef(null);
-  const currentContextRef = useRef('download_root');
+  const fileInputRef = useRef(null);
 
   // Load config & sources lúc mount
   useEffect(() => {
@@ -63,112 +62,81 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
     loadVideos(type, id);
   };
 
-  // --- BROWSER DEFAULT FOLDER PICKER ---
-  const triggerFolderPicker = async (context) => {
-    currentContextRef.current = context;
-
-    // 1. Thử dùng File System Access API chuẩn của trình duyệt (Chrome, Edge)
-    if (window.showDirectoryPicker) {
-      try {
-        const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
-        await handleDirectoryHandle(dirHandle, context);
-        return;
-      } catch (err) {
-        if (err.name === 'AbortError') return; // Người dùng ấn Hủy
-        console.warn('showDirectoryPicker error:', err);
+  // 1. Mở hộp thoại Windows Explorer chọn thư mục máy tính
+  const handlePickLocalFolder = async () => {
+    showToast('Đang mở hộp thoại Windows Explorer để chọn thư mục...', 'info');
+    const res = await api.pickFolder();
+    if (res && res.success) {
+      showToast(`✓ Đã nạp thành công <b>${res.video_count} video</b> từ thư mục <b>${res.folder_name}</b>!`, 'success');
+      await loadSourcesData();
+      setActiveSourceType('local');
+      setActiveSourceId(res.path);
+      if (res.videos && res.videos.length > 0) {
+        setVideosList(res.videos);
+      } else {
+        loadVideos('local', res.path);
       }
-    }
-
-    // 2. Fallback input webkitdirectory
-    if (folderInputRef.current) {
-      folderInputRef.current.value = '';
-      folderInputRef.current.click();
+    } else if (res && res.message && !res.message.includes('hủy')) {
+      showToast(`⚠️ ${res.message}`, 'warning');
     }
   };
 
-  const handleDirectoryHandle = async (dirHandle, context) => {
-    const folderName = dirHandle.name;
-
-    if (context === 'download_root') {
-      const newPath = `D:/Mine/dich-video/output/${folderName}/`;
-      setDownloadRootDir(api.formatWinPath(newPath));
-      await api.updateConfig({ download_root_dir: newPath });
-      showToast(`✓ Đã đổi thư mục tải về gốc thành:<br/><span class="font-mono text-white text-[11px]">${api.formatWinPath(newPath)}</span>`, 'success');
-      loadSourcesData();
-    } else if (context === 'local_import') {
-      showToast(`Đang quét video từ thư mục: <b>${folderName}</b>...`, 'info');
-      const items = [];
-      for await (const entry of dirHandle.values()) {
-        if (entry.kind === 'file' && /\.(mp4|mov|mkv|webm|avi|flv)$/i.test(entry.name)) {
-          try {
-            const file = await entry.getFile();
-            const isRemix = /dance|remix|music|beat|trend/i.test(file.name);
-            items.push({
-              filename: file.name,
-              path: `${folderName}/${file.name}`,
-              subfolder: folderName,
-              size_mb: +(file.size / (1024 * 1024)).toFixed(2),
-              duration_str: '00:30',
-              has_sub: !isRemix,
-              suggest_remix: isRemix
-            });
-          } catch (e) {}
-        }
+  // 2. Mở hộp thoại Windows Explorer chọn trực tiếp file video
+  const handlePickLocalFiles = async () => {
+    showToast('Đang mở hộp thoại Windows Explorer để chọn file video...', 'info');
+    const res = await api.pickFiles();
+    if (res && res.success && res.videos?.length > 0) {
+      showToast(`✓ Đã chọn <b>${res.videos.length} video</b> từ máy tính!`, 'success');
+      setVideosList(prev => [...res.videos, ...prev]);
+      // Nếu người dùng chọn đúng 1 file, mở ngay vào Studio
+      if (res.videos.length === 1) {
+        onSelectVideo(res.videos[0], 'translate');
       }
-
-      if (items.length === 0) {
-        showToast(`⚠️ Không tìm thấy file video (.mp4, .mov...) nào trong thư mục "${folderName}".`, 'warning');
-        return;
-      }
-
-      // Nạp vào danh sách
-      setVideosList(items);
-      setActiveSourceType('local');
-      setActiveSourceId(folderName);
-      api.scanLocal(folderName, folderName).catch(() => {});
-      showToast(`✓ Đã nạp thành công <b>${items.length} video</b> từ thư mục <b>${folderName}</b>!`, 'success');
+    } else if (res && res.message && !res.message.includes('hủy')) {
+      showToast(`⚠️ ${res.message}`, 'warning');
     }
   };
 
-  const handleInputFolderSelected = (event) => {
-    const files = Array.from(event.target.files);
-    if (!files.length) return;
-
-    const firstRel = files[0].webkitRelativePath || files[0].name;
-    const folderName = firstRel.split('/')[0] || 'Thu_Muc_May';
-    const context = currentContextRef.current;
-
-    if (context === 'download_root') {
-      const newPath = `D:/Mine/dich-video/output/${folderName}/`;
-      setDownloadRootDir(api.formatWinPath(newPath));
-      api.updateConfig({ download_root_dir: newPath });
-      showToast(`✓ Đã đổi thư mục tải về gốc: ${folderName}`, 'success');
+  // 3. Đổi thư mục tải về gốc (download_root) qua Windows Explorer
+  const handlePickDownloadRoot = async () => {
+    const res = await api.pickFolder();
+    if (res && res.success && res.path) {
+      setDownloadRootDir(api.formatWinPath(res.path));
+      await api.updateConfig({ download_root_dir: res.path });
+      showToast(`✓ Đã đổi thư mục tải về gốc thành:<br/><span class="font-mono text-white text-[11px]">${api.formatWinPath(res.path)}</span>`, 'success');
       loadSourcesData();
-    } else if (context === 'local_import') {
-      const videoFiles = files.filter(f => /\.(mp4|mov|mkv|webm|avi|flv)$/i.test(f.name));
-      if (videoFiles.length === 0) {
-        showToast(`⚠️ Không có file video hợp lệ trong thư mục "${folderName}".`, 'warning');
-        return;
-      }
+    }
+  };
 
-      const items = videoFiles.map(f => {
-        const isRemix = /dance|remix|music|beat|trend/i.test(f.name);
-        return {
-          filename: f.name,
-          path: f.webkitRelativePath || f.name,
-          subfolder: folderName,
-          size_mb: +(f.size / (1024 * 1024)).toFixed(2),
-          duration_str: '00:30',
-          has_sub: !isRemix,
-          suggest_remix: isRemix
-        };
-      });
-
-      setVideosList(items);
+  // 4. Nhập/Dán thủ công đường dẫn thư mục hoặc file trên máy
+  const handleManualPathPrompt = async () => {
+    const p = prompt('Nhập đường dẫn thư mục hoặc file video trên máy (ví dụ: D:\\Videos\\MyTiktok):');
+    if (!p || !p.trim()) return;
+    const trimmed = p.trim();
+    showToast(`Đang quét đường dẫn: ${trimmed}...`, 'info');
+    const res = await api.scanLocal(trimmed);
+    if (res && res.success) {
+      showToast(`✓ Đã quét thành công ${res.video_count} video từ thư mục ${res.folder_name}!`, 'success');
+      await loadSourcesData();
       setActiveSourceType('local');
-      setActiveSourceId(folderName);
-      api.scanLocal(folderName, folderName).catch(() => {});
-      showToast(`✓ Đã nạp thành công <b>${items.length} video</b> từ thư mục <b>${folderName}</b>!`, 'success');
+      setActiveSourceId(res.path);
+      loadVideos('local', res.path);
+    } else {
+      showToast(`❌ Không tìm thấy video hợp lệ tại đường dẫn này!`, 'error');
+    }
+  };
+
+  // 5. Tải file video trực tiếp từ trình duyệt (Upload)
+  const handleDirectVideoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    showToast(`Đang nạp file video <b>${file.name}</b> vào Studio...`, 'info');
+    const res = await api.uploadVideo(file);
+    if (res && res.success && res.video) {
+      showToast(`✓ Đã nạp video <b>${res.video.filename}</b> thành công!`, 'success');
+      onSelectVideo(res.video, 'translate');
+    } else {
+      showToast('❌ Không thể nạp video này lên máy chủ', 'error');
     }
   };
 
@@ -202,15 +170,13 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-y-auto bg-slate-950 space-y-4">
-      {/* Hidden browser default folder picker */}
+      {/* Hidden browser file input fallback */}
       <input
         type="file"
-        ref={folderInputRef}
-        webkitdirectory="true"
-        directory="true"
-        multiple
+        ref={fileInputRef}
+        accept="video/*"
         className="hidden"
-        onChange={handleInputFolderSelected}
+        onChange={handleDirectVideoUpload}
       />
 
       {/* 1. Download Root Bar */}
@@ -223,9 +189,9 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
             {downloadRootDir}
           </span>
           <button
-            onClick={() => triggerFolderPicker('download_root')}
+            onClick={handlePickDownloadRoot}
             className="px-3 py-1.5 bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 rounded-lg border border-sky-500/30 flex items-center gap-1.5 font-semibold transition active:scale-95"
-            title="Dùng hộp thoại chọn thư mục mặc định của trình duyệt"
+            title="Mở hộp thoại Windows Explorer để chọn thư mục tải về"
           >
             <Folder className="w-3.5 h-3.5" /> Chọn Thư Mục Khác
           </button>
@@ -278,24 +244,27 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
 
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={() => triggerFolderPicker('local_import')}
-            className="px-3.5 py-2 bg-gradient-to-r from-amber-500/20 to-orange-500/20 hover:from-amber-500/30 hover:to-orange-500/30 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md transition active:scale-95"
-            title="Mở hộp thoại chọn folder mặc định của trình duyệt để nạp video trên máy"
+            onClick={handlePickLocalFiles}
+            className="px-3.5 py-2 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md transition active:scale-95"
+            title="Mở Windows Explorer chọn trực tiếp 1 hoặc nhiều file video"
           >
-            <Laptop className="w-3.5 h-3.5" /> Chọn Thư Mục Có Sẵn Trên Máy
+            <FileVideo className="w-3.5 h-3.5" /> Chọn File Video (Máy)
           </button>
 
           <button
-            onClick={() => {
-              showToast('Đang quét tự động các kênh theo dõi...', 'info');
-              setTimeout(() => {
-                showToast('✓ Quét hoàn tất: Không có video mới trùng lặp.', 'success');
-                loadSourcesData();
-              }, 1200);
-            }}
-            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+            onClick={handlePickLocalFolder}
+            className="px-3.5 py-2 bg-gradient-to-r from-amber-500/20 to-orange-500/20 hover:from-amber-500/30 hover:to-orange-500/30 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md transition active:scale-95"
+            title="Mở Windows Explorer chọn cả thư mục chứa video trên máy"
           >
-            <RefreshCw className="w-3.5 h-3.5" /> Quét Kênh
+            <Laptop className="w-3.5 h-3.5" /> Chọn Thư Mục Video (Máy)
+          </button>
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+            title="Nạp trực tiếp file video từ ổ đĩa vào Studio"
+          >
+            <Upload className="w-3.5 h-3.5" /> Nạp File
           </button>
         </div>
       </div>
@@ -382,18 +351,28 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
               })
             ) : (
               <p className="text-xs text-slate-500 px-2 py-1 italic">
-                Chưa có thư mục máy nào (Bấm nút bên dưới để chọn)
+                Chưa có thư mục máy nào
               </p>
             )}
           </div>
 
-          <button
-            onClick={() => triggerFolderPicker('local_import')}
-            className="w-full mt-3 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-xl text-xs font-bold border border-amber-500/30 flex items-center justify-center gap-1.5 transition active:scale-95"
-            title="Dùng hộp thoại chọn thư mục mặc định của trình duyệt"
-          >
-            <Laptop className="w-3.5 h-3.5" /> Thêm Thư Mục Máy Tính
-          </button>
+          <div className="space-y-1.5 mt-3 pt-2 border-t border-slate-800">
+            <button
+              onClick={handlePickLocalFolder}
+              className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-xl text-xs font-bold border border-amber-500/30 flex items-center justify-center gap-1.5 transition active:scale-95"
+              title="Mở Windows Explorer để duyệt và thêm thư mục"
+            >
+              <Laptop className="w-3.5 h-3.5" /> Thêm Thư Mục Máy Tính
+            </button>
+
+            <button
+              onClick={handleManualPathPrompt}
+              className="w-full py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded-xl text-[11px] font-medium border border-slate-800 flex items-center justify-center gap-1.5 transition"
+              title="Dán đường dẫn thư mục có sẵn trên ổ đĩa"
+            >
+              📋 Dán Đường Dẫn Thư Mục
+            </button>
+          </div>
         </div>
 
         {/* Right Video Cards Repository (8 cols) */}
@@ -446,13 +425,27 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                 <RefreshCw className="w-4 h-4 animate-spin text-sky-400" /> Đang nạp danh sách video từ ổ đĩa...
               </div>
             ) : filteredVideos.length === 0 ? (
-              <div className="text-center py-12 text-slate-500 text-xs">
-                Không tìm thấy video nào phù hợp với bộ lọc
+              <div className="text-center py-12 text-slate-500 text-xs space-y-3">
+                <p>Không tìm thấy video nào trong thư mục này</p>
+                <div className="flex items-center justify-center gap-2">
+                  <button
+                    onClick={handlePickLocalFiles}
+                    className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-semibold"
+                  >
+                    📂 Chọn File Video Từ Máy
+                  </button>
+                  <button
+                    onClick={handlePickLocalFolder}
+                    className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-semibold"
+                  >
+                    📁 Quét Thư Mục Khác
+                  </button>
+                </div>
               </div>
             ) : (
               filteredVideos.map(v => (
                 <div
-                  key={v.filename}
+                  key={v.path || v.filename}
                   className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-slate-700 transition flex items-center justify-between gap-4 group"
                 >
                   <div className="flex items-center gap-3 min-w-0">
@@ -464,7 +457,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                     </div>
 
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold text-white truncate" title={v.filename}>
+                      <p className="text-xs font-semibold text-white truncate" title={v.path || v.filename}>
                         {v.filename}
                       </p>
                       <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
