@@ -34,6 +34,19 @@ for _cand in [
             os.environ["PATH"] = str(_cand) + os.pathsep + os.environ.get("PATH", "")
 
 
+def get_ffmpeg_bin() -> str:
+    """Trả về đường dẫn tuyệt đối đến bản build FFmpeg tối ưu cho GPU (ưu tiên Jellyfin FFmpeg tương thích driver NVIDIA)."""
+    if _jellyfin_path.exists() and (_jellyfin_path / "ffmpeg.exe").exists():
+        return str((_jellyfin_path / "ffmpeg.exe").resolve())
+    return "ffmpeg"
+
+
+def get_ffprobe_bin() -> str:
+    if _jellyfin_path.exists() and (_jellyfin_path / "ffprobe.exe").exists():
+        return str((_jellyfin_path / "ffprobe.exe").resolve())
+    return "ffprobe"
+
+
 class FFmpegError(RuntimeError):
     pass
 
@@ -47,8 +60,9 @@ def is_nvenc_available() -> bool:
     if _NVENC_AVAILABLE is not None:
         return _NVENC_AVAILABLE
     try:
+        ffmpeg_bin = get_ffmpeg_bin()
         res = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"],
+            [ffmpeg_bin, "-hide_banner", "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=5,
@@ -60,6 +74,10 @@ def is_nvenc_available() -> bool:
 
 
 def _run(cmd: list[str], timeout: int = 3600) -> subprocess.CompletedProcess:
+    if cmd and cmd[0] == "ffmpeg":
+        cmd[0] = get_ffmpeg_bin()
+    elif cmd and cmd[0] == "ffprobe":
+        cmd[0] = get_ffprobe_bin()
     try:
         return subprocess.run(
             cmd,
@@ -76,6 +94,23 @@ def _run(cmd: list[str], timeout: int = 3600) -> subprocess.CompletedProcess:
         ) from exc
     except subprocess.CalledProcessError as exc:
         raise FFmpegError(exc.stderr.strip() or str(exc)) from exc
+
+
+def safe_replace(tmp_path: Path, dest_path: Path) -> Path:
+    """Thay thế file an toàn trên Windows ngay cả khi file đích đang bị mở trong Player / Trình duyệt."""
+    import time
+    try:
+        if dest_path.exists():
+            try:
+                dest_path.unlink()
+            except Exception:
+                pass
+        tmp_path.replace(dest_path)
+        return dest_path
+    except PermissionError:
+        alt_path = dest_path.with_name(f"{dest_path.stem}_{int(time.time())}{dest_path.suffix}")
+        tmp_path.replace(alt_path)
+        return alt_path
 
 
 def require_ffmpeg() -> None:
@@ -256,32 +291,91 @@ def get_audio_anti_detect_filter(sample_rate: int = 44100) -> str:
     )
 
 
-def get_subtitle_ass_style(
+def to_ass_timestamp(seconds: float) -> str:
+    s = max(0.0, float(seconds))
+    h = int(s // 3600)
+    m = int((s % 3600) // 60)
+    sec = s % 60
+    return f"{h}:{m:02d}:{sec:05.2f}"
+
+
+def generate_studio_ass_file(
+    srt_path: Path,
+    output_ass_path: Path,
+    video_width: int,
+    video_height: int,
     font_name: str = "Arial",
-    font_size: int = 16,
-    sub_style: str = "solid_black",
+    font_size: int = 13,
+    sub_style: str = "blur_box",
     sub_position: str = "bottom",
-    sub_margin_v: int = 30,
-    box_padding: int = 5,
+    sub_margin_v: int = 38,
+    box_width: int = 88,
+    box_padding: int = 6,
     box_opacity: float | int = 100,
-) -> str:
-    """Tạo chuỗi force_style cho libass.
-    - font_size: Cỡ chữ phụ đề (px).
-    - box_padding: Độ dày / chiều cao của hộp đè (Outline trong BorderStyle=3).
-    - sub_position: 'bottom' (Alignment=2), 'middle' (Alignment=5), 'top' (Alignment=8).
-    - sub_margin_v: Khoảng cách pixel từ cạnh đáy/đỉnh.
-    - box_opacity: Tỷ lệ che phủ / mờ của hộp đè (% từ 0 đến 100).
+) -> tuple[Path, dict[str, int] | None]:
+    """Tạo file phụ đề ASS và tính tọa độ blur box khớp 1:1 với màn hình Studio Preview:
+    - PlayResX & PlayResY khóa theo tỉ lệ chuẩn Studio Canvas (260x462 dọc hoặc 520x292 ngang).
+    - Hộp đè (Box) được vẽ chính xác theo box_width % và vị trí sub_margin_v.
+    - Chữ phụ đề được căn giữa chuẩn xác bên trong hộp đè.
     """
-    align = 2
-    if sub_position == "middle":
-        align = 5
-    elif sub_position == "top":
-        align = 8
+    font_map = {
+        "font-bevietnam": "Be Vietnam Pro",
+        "font-montserrat": "Montserrat",
+        "font-oswald": "Oswald",
+    }
+    resolved_font = font_map.get(font_name, font_name or "Arial")
 
-    margin_v = max(0, int(sub_margin_v or 30))
-    outline = max(1, int(box_padding or 5))
+    is_portrait = video_height > video_width
+    play_w = 260 if is_portrait else 520
+    play_h = 462 if is_portrait else 292
 
-    # Xử lý box_opacity (% từ 0-100 hoặc float 0.0-1.0)
+    scale_x = video_width / float(play_w)
+    scale_y = video_height / float(play_h)
+
+    margin_v = max(0, int(sub_margin_v or 38))
+    bw_pct = max(30, min(100, int(box_width or 88)))
+    pad = max(2, int(box_padding or 6))
+    fs = max(8, int(font_size or 13))
+
+    box_w_ass = int(round(play_w * (bw_pct / 100.0)))
+    box_x_ass = (play_w - box_w_ass) // 2
+
+    from .subtitles import read_srt
+    segments = []
+    if srt_path.exists():
+        try:
+            segments = read_srt(srt_path)
+        except Exception as e:
+            print(f"[media generate_ass] Lỗi đọc SRT: {e}")
+
+    has_multiline = any("\n" in (s.translated or s.text or "") or len(s.translated or s.text or "") > 32 for s in segments)
+    line_factor = 2.2 if has_multiline else 1.5
+    box_h_ass = max(32, int(round(fs * line_factor + pad * 2.2)))
+
+    box_y2_ass = play_h - margin_v
+    box_y1_ass = box_y2_ass - box_h_ass
+
+    text_margin_v = margin_v + max(2, (box_h_ass - int(fs * (1.8 if has_multiline else 1.0))) // 2)
+
+    blur_info = None
+    if sub_style == "blur_box":
+        vid_box_x = int(box_x_ass * scale_x)
+        vid_box_w = int(box_w_ass * scale_x)
+        vid_box_y = int(box_y1_ass * scale_y)
+        vid_box_h = int(box_h_ass * scale_y)
+
+        if vid_box_x % 2 != 0: vid_box_x -= 1
+        if vid_box_w % 2 != 0: vid_box_w -= 1
+        if vid_box_y % 2 != 0: vid_box_y -= 1
+        if vid_box_h % 2 != 0: vid_box_h += 1
+
+        blur_info = {
+            "x": max(0, min(video_width - 10, vid_box_x)),
+            "y": max(0, min(video_height - 10, vid_box_y)),
+            "w": min(video_width - vid_box_x, vid_box_w),
+            "h": min(video_height - vid_box_y, vid_box_h),
+        }
+
     try:
         op_val = float(box_opacity)
         if op_val > 1.0:
@@ -291,39 +385,144 @@ def get_subtitle_ass_style(
     except (ValueError, TypeError):
         op = 1.0
 
-    # Tương thích ngược kiểu cũ nếu chọn black_box / white_box mà không truyền opacity riêng
-    if box_opacity == 100 or box_opacity == 1.0:
-        if sub_style == "black_box":
-            op = 0.60
-        elif sub_style == "white_box":
-            op = 0.60
-
-    # Trong ASS: &HAABBGGRR, AA: 00 = đặc 100%, FF = trong suốt 0%
     alpha_int = int(round((1.0 - op) * 255))
     alpha_hex = f"{alpha_int:02X}"
 
-    # PlayResY=462, PlayResX=260: Khóa tọa độ chuẩn theo tỷ lệ khung Preview Canvas (260x462px)
-    # Giúp MarginV, FontSize và Outline khớp 100% với màn hình Studio biên tập, không bị lệch/chạy lên trên
+    if sub_style == "blur_box":
+        box_alpha = "4D" if op >= 0.7 else alpha_hex  # ~70% opacity default
+        box_bgr = "251912"  # Slate Navy #121925
+        text_color = "&H00FFFFFF"
+        text_outline = "&H00000000"
+        has_box = True
+    elif sub_style in ("solid_black", "black_box"):
+        box_alpha = alpha_hex
+        box_bgr = "000000"
+        text_color = "&H00FFFFFF"
+        text_outline = "&H00000000"
+        has_box = True
+    elif sub_style in ("solid_white", "white_box"):
+        box_alpha = alpha_hex
+        box_bgr = "FFFFFF"
+        text_color = "&H00000000"
+        text_outline = "&H00FFFFFF"
+        has_box = True
+    else:  # classic
+        has_box = False
+        text_color = "&H00FFFFFF"
+        text_outline = "&H00000000"
+
+    ass_lines = [
+        "[Script Info]",
+        "Title: Studio Subtitles",
+        "ScriptType: v4.00+",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
+        "YCbCr Matrix: TV.709",
+        f"PlayResX: {play_w}",
+        f"PlayResY: {play_h}",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    ]
+
+    if has_box:
+        box_color = f"&H{box_alpha}{box_bgr}"
+        ass_lines.append(
+            f"Style: Default,{resolved_font},{fs},{text_color},&H000000FF,{text_outline},&H00000000,-1,0,0,0,100,100,0,0,1,0,0,2,10,10,{text_margin_v},1"
+        )
+        ass_lines.append(
+            f"Style: BoxBg,Arial,10,{box_color},&H000000FF,{box_color},{box_color},0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1"
+        )
+    else:
+        ass_lines.append(
+            f"Style: Default,{resolved_font},{fs},{text_color},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,10,10,{margin_v},1"
+        )
+
+    ass_lines.append("")
+    ass_lines.append("[Events]")
+    ass_lines.append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")
+
+    for seg in segments:
+        t_start = to_ass_timestamp(seg.start)
+        t_end = to_ass_timestamp(seg.end)
+        txt = (seg.translated or seg.text or "").strip().replace("\n", "\\N")
+        if not txt:
+            continue
+
+        if has_box:
+            cur_lines = txt.count("\\N") + 1
+            if cur_lines > 1:
+                cur_h = max(38, int(round(fs * 2.3 + pad * 2.2)))
+                cur_y1 = box_y2_ass - cur_h
+                cur_tmv = margin_v + max(2, (cur_h - int(fs * 2.0)) // 2)
+            else:
+                cur_h = box_h_ass
+                cur_y1 = box_y1_ass
+                cur_tmv = text_margin_v
+
+            box_draw = (
+                f"{{\\pos(0,0)\\p1\\1c&H{box_bgr}&\\1a&H{box_alpha}&\\3c&H{box_bgr}&\\3a&H{box_alpha}&\\bord0\\shad0}}"
+                f"m {box_x_ass} {cur_y1} l {box_x_ass + box_w_ass} {cur_y1} "
+                f"l {box_x_ass + box_w_ass} {box_y2_ass} l {box_x_ass} {box_y2_ass}{{\\p0}}"
+            )
+            ass_lines.append(f"Dialogue: 0,{t_start},{t_end},BoxBg,,0,0,0,,{box_draw}")
+            ass_lines.append(f"Dialogue: 1,{t_start},{t_end},Default,,0,0,{cur_tmv},,{txt}")
+        else:
+            ass_lines.append(f"Dialogue: 0,{t_start},{t_end},Default,,0,0,{margin_v},,{txt}")
+
+    output_ass_path.parent.mkdir(parents=True, exist_ok=True)
+    output_ass_path.write_text("\n".join(ass_lines), encoding="utf-8")
+    return output_ass_path, blur_info
+
+
+def get_subtitle_ass_style(
+    font_name: str = "Arial",
+    font_size: int = 16,
+    sub_style: str = "solid_black",
+    sub_position: str = "bottom",
+    sub_margin_v: int = 30,
+    box_padding: int = 5,
+    box_opacity: float | int = 100,
+) -> str:
+    """Tạo chuỗi force_style cho libass (tương thích ngược)."""
+    align = 2
+    if sub_position == "middle":
+        align = 5
+    elif sub_position == "top":
+        align = 8
+
+    margin_v = max(0, int(sub_margin_v or 30))
+    outline = max(1, int(box_padding or 5))
+
+    try:
+        op_val = float(box_opacity)
+        if op_val > 1.0:
+            op = max(0.0, min(1.0, op_val / 100.0))
+        else:
+            op = max(0.0, min(1.0, op_val))
+    except (ValueError, TypeError):
+        op = 1.0
+
+    alpha_int = int(round((1.0 - op) * 255))
+    alpha_hex = f"{alpha_int:02X}"
+
     res_prefix = "PlayResY=462,PlayResX=260,"
 
     if sub_style == "blur_box":
-        # Kính mờ (Frosted Blur Glass): Hộp tối bán trong suốt 65% che kín phụ đề gốc
-        blur_alpha = "58"  # ~65% opacity
-        blur_bg = f"&H{blur_alpha}251912"  # Màu Slate Navy tối sang trọng (#121925)
+        blur_alpha = "58"
+        blur_bg = f"&H{blur_alpha}251912"
         return (
             f"{res_prefix}FontName={font_name},FontSize={font_size},"
             f"PrimaryColour=&H00FFFFFF,OutlineColour={blur_bg},BackColour={blur_bg},"
             f"BorderStyle=3,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
         )
     elif sub_style in ("solid_black", "black_box"):
-        # Nền đen đặc hoặc mờ tùy chỉnh, chữ trắng
         return (
             f"{res_prefix}FontName={font_name},FontSize={font_size},"
             f"PrimaryColour=&H00FFFFFF,OutlineColour=&H{alpha_hex}000000,BackColour=&H{alpha_hex}000000,"
             f"BorderStyle=3,Outline={outline},Shadow=0,Alignment={align},MarginV={margin_v}"
         )
     elif sub_style in ("solid_white", "white_box"):
-        # Nền trắng với độ mờ tùy chỉnh, chữ đen
         return (
             f"{res_prefix}FontName={font_name},FontSize={font_size},"
             f"PrimaryColour=&H00000000,OutlineColour=&H{alpha_hex}FFFFFF,BackColour=&H{alpha_hex}FFFFFF,"
@@ -350,6 +549,7 @@ def mux_audio(
     sub_position: str = "bottom",
     sub_margin_v: int = 30,
     box_padding: int = 5,
+    box_width: int = 88,
     box_opacity: float | int = 100,
     watermark_enabled: bool = False,
     watermark_path: Path | str | None = None,
@@ -375,7 +575,14 @@ def mux_audio(
     tmp = output_path.with_name(output_path.stem + ".tmp" + output_path.suffix)
     mix = max(0.0, min(1.0, float(original_mix or 0.0)))
 
-    cmd = ["ffmpeg", "-y", "-hwaccel", "auto", "-i", str(video_path), "-i", str(audio_path)]
+    cmd = [
+        "ffmpeg", "-y",
+        "-threads", "6",
+        "-filter_threads", "4",
+        "-hwaccel", "auto",
+        "-i", str(video_path),
+        "-i", str(audio_path),
+    ]
 
     has_wm = bool(watermark_enabled and watermark_path and Path(watermark_path).exists())
     if has_wm:
@@ -407,26 +614,37 @@ def mux_audio(
         cur_v = "v_wm"
         need_video_encode = True
 
-    # 3. In phụ đề cứng nếu kích hoạt
-    if burn_sub and srt_path is not None:
-        srt_escaped = (
-            str(srt_path.resolve())
-            .replace("\\", "/")
-            .replace(":", "\\:")
-            .replace("'", r"\'")
-        )
-        style = get_subtitle_ass_style(
+    # 3. In phụ đề cứng khớp chuẩn 1:1 Preview Canvas Studio
+    ass_tmp_file: Path | None = None
+    if burn_sub and srt_path is not None and Path(srt_path).exists():
+        vw, vh = get_video_resolution(video_path)
+        ass_tmp_file = output_path.parent / f"{output_path.stem}_render.ass"
+        ass_file, blur_info = generate_studio_ass_file(
+            srt_path=Path(srt_path),
+            output_ass_path=ass_tmp_file,
+            video_width=vw,
+            video_height=vh,
             font_name=font_name,
             font_size=font_size,
             sub_style=sub_style,
             sub_position=sub_position,
             sub_margin_v=sub_margin_v,
+            box_width=box_width,
             box_padding=box_padding,
             box_opacity=box_opacity,
         )
-        filter_complex_parts.append(
-            f"[{cur_v}]subtitles='{srt_escaped}':force_style='{style}'[v_sub]"
-        )
+        ass_escaped = str(ass_file.resolve()).replace("\\", "/").replace(":", r"\:")
+
+        if blur_info:
+            bx, by, bw, bh = blur_info["x"], blur_info["y"], blur_info["w"], blur_info["h"]
+            filter_complex_parts.append(
+                f"[{cur_v}]split=2[{cur_v}_base][{cur_v}_blur_src];"
+                f"[{cur_v}_blur_src]crop={bw}:{bh}:{bx}:{by},avgblur=18[{cur_v}_blurred];"
+                f"[{cur_v}_base][{cur_v}_blurred]overlay={bx}:{by}[{cur_v}_blur_done]"
+            )
+            cur_v = f"{cur_v}_blur_done"
+
+        filter_complex_parts.append(f"[{cur_v}]ass='{ass_escaped}'[v_sub]")
         cur_v = "v_sub"
         need_video_encode = True
 
@@ -497,9 +715,14 @@ def mux_audio(
             _run(fallback_cmd)
         else:
             raise
+    finally:
+        if ass_tmp_file and ass_tmp_file.exists():
+            try:
+                ass_tmp_file.unlink(missing_ok=True)
+            except Exception:
+                pass
 
-    tmp.replace(output_path)
-    return output_path
+    return safe_replace(tmp, output_path)
 
 
 def remix_video(
@@ -521,6 +744,7 @@ def remix_video(
     sub_position: str = "bottom",
     sub_margin_v: int = 30,
     box_padding: int = 5,
+    box_width: int = 88,
     box_opacity: float | int = 100,
 ) -> Path:
     """Xử lý video nhanh không cần dịch:
@@ -533,7 +757,13 @@ def remix_video(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = output_path.with_name(output_path.stem + ".tmp" + output_path.suffix)
 
-    cmd = ["ffmpeg", "-y", "-hwaccel", "auto", "-i", str(video_path)]
+    cmd = [
+        "ffmpeg", "-y",
+        "-threads", "6",
+        "-filter_threads", "4",
+        "-hwaccel", "auto",
+        "-i", str(video_path),
+    ]
 
     has_wm = bool(watermark_enabled and watermark_path and Path(watermark_path).exists())
     if has_wm:
@@ -566,23 +796,36 @@ def remix_video(
         need_video_encode = True
 
     # 3. Chèn phụ đề nếu có
+    ass_tmp_file: Path | None = None
     if burn_sub and srt_path is not None and Path(srt_path).exists():
-        srt_escaped = (
-            str(Path(srt_path).resolve())
-            .replace("\\", "/")
-            .replace(":", "\\:")
-            .replace("'", r"\'")
-        )
-        style = get_subtitle_ass_style(
+        vw, vh = get_video_resolution(video_path)
+        ass_tmp_file = output_path.parent / f"{output_path.stem}_render.ass"
+        ass_file, blur_info = generate_studio_ass_file(
+            srt_path=Path(srt_path),
+            output_ass_path=ass_tmp_file,
+            video_width=vw,
+            video_height=vh,
             font_name=font_name,
             font_size=font_size,
             sub_style=sub_style,
             sub_position=sub_position,
             sub_margin_v=sub_margin_v,
+            box_width=box_width,
             box_padding=box_padding,
             box_opacity=box_opacity,
         )
-        filter_complex_parts.append(f"[{cur_v}]subtitles='{srt_escaped}':force_style='{style}'[v_sub]")
+        ass_escaped = str(ass_file.resolve()).replace("\\", "/").replace(":", r"\:")
+
+        if blur_info:
+            bx, by, bw, bh = blur_info["x"], blur_info["y"], blur_info["w"], blur_info["h"]
+            filter_complex_parts.append(
+                f"[{cur_v}]split=2[{cur_v}_base][{cur_v}_blur_src];"
+                f"[{cur_v}_blur_src]crop={bw}:{bh}:{bx}:{by},avgblur=18[{cur_v}_blurred];"
+                f"[{cur_v}_base][{cur_v}_blurred]overlay={bx}:{by}[{cur_v}_blur_done]"
+            )
+            cur_v = f"{cur_v}_blur_done"
+
+        filter_complex_parts.append(f"[{cur_v}]ass='{ass_escaped}'[v_sub]")
         cur_v = "v_sub"
         need_video_encode = True
 
@@ -636,9 +879,14 @@ def remix_video(
             _run(fallback_cmd)
         else:
             raise
+    finally:
+        if ass_tmp_file and ass_tmp_file.exists():
+            try:
+                ass_tmp_file.unlink(missing_ok=True)
+            except Exception:
+                pass
 
-    tmp.replace(output_path)
-    return output_path
+    return safe_replace(tmp, output_path)
 
 
 
@@ -652,6 +900,7 @@ def burn_subtitles(
     sub_position: str = "bottom",
     sub_margin_v: int = 30,
     box_padding: int = 5,
+    box_width: int = 88,
     box_opacity: float | int = 100,
     video_quality: str = "high",
     anti_video: bool = False,
@@ -682,6 +931,7 @@ def burn_subtitles(
         sub_position=sub_position,
         sub_margin_v=sub_margin_v,
         box_padding=box_padding,
+        box_width=box_width,
         box_opacity=box_opacity,
     )
 

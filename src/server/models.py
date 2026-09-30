@@ -75,6 +75,8 @@ class RenderConfigRequest(BaseModel):
     box_opacity: int = 100
     font_size: int = 16
     box_padding: int = 6
+    box_width: int = 88
+    font_family: str = "Arial"
     margin_v: int = 38
     voice: str = "vi-VN-HoaiMyNeural"
     pitch_shift: bool = True

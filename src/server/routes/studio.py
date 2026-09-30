@@ -815,7 +815,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
             out_filename = f"{stem}_{req.anti_combo}_remix{ext}" if req.mode == "remix" else f"{stem}_nosub{ext}"
             out_path = dest_dir / out_filename
 
-            remix_video(
+            out_path = remix_video(
                 video_path=target_p,
                 output_path=out_path,
                 anti_video=True,
@@ -824,6 +824,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                 watermark_path=actual_wm_path,
                 video_quality="gpu",
             )
+            out_filename = out_path.name
         else:
             out_filename = f"{stem}_sub_vi{ext}"
             out_path = dest_dir / out_filename
@@ -855,7 +856,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
             # 2. Render video thành phẩm: hòa âm tiếng Việt + đè phụ đề chuẩn Canvas + watermark
             if dub_wav.exists():
                 orig_mix = 0.0 if req.is_orig_muted else (float(req.audio_ducking or 12) / 100.0)
-                mux_audio(
+                out_path = mux_audio(
                     video_path=target_p,
                     audio_path=dub_wav,
                     output_path=out_path,
@@ -863,9 +864,11 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                     srt_path=srt_path,
                     burn_sub=True,
                     font_size=req.font_size,
+                    font_name=req.font_family,
                     sub_style=req.mask_style,
                     sub_margin_v=req.margin_v,
                     box_padding=req.box_padding,
+                    box_width=req.box_width,
                     box_opacity=req.box_opacity,
                     watermark_enabled=req.watermark_enabled,
                     watermark_path=actual_wm_path,
@@ -874,14 +877,16 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                     video_quality="gpu",
                 )
             else:
-                burn_subtitles(
+                out_path = burn_subtitles(
                     video_path=target_p,
                     srt_path=srt_path,
                     output_path=out_path,
                     font_size=req.font_size,
+                    font_name=req.font_family,
                     sub_style=req.mask_style,
                     sub_margin_v=req.margin_v,
                     box_padding=req.box_padding,
+                    box_width=req.box_width,
                     box_opacity=req.box_opacity,
                     watermark_enabled=req.watermark_enabled,
                     watermark_path=actual_wm_path,
@@ -889,6 +894,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                     anti_audio=req.pitch_shift,
                     video_quality="gpu",
                 )
+            out_filename = out_path.name
 
         # Cập nhật DB
         init_db()

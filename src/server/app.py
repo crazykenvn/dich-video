@@ -38,21 +38,36 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     print("[Studio Server] Server ready at http://localhost:8000")
 
-    # Tự động mở trình duyệt nếu chưa mở
-    def _open_browser():
-        import time
-        import webbrowser
-        time.sleep(1.0)
+    # Tự động mở trình duyệt nếu chưa mở (chỉ mở đúng 1 lần cho mỗi phiên khởi động máy chủ)
+    import os
+    import threading
+
+    flag_file = OUTPUT_DIR / "tmp" / f"browser_opened_{os.getppid()}.flag"
+    auto_open = os.environ.get("STUDIO_AUTO_OPEN_BROWSER", "1").lower() not in ("0", "false", "no", "off")
+
+    if auto_open and not flag_file.exists():
         try:
-            webbrowser.open("http://localhost:8000")
+            flag_file.touch(exist_ok=True)
         except Exception:
             pass
 
-    import threading
-    threading.Thread(target=_open_browser, daemon=True).start()
+        def _open_browser():
+            import time
+            import webbrowser
+            time.sleep(0.8)
+            try:
+                webbrowser.open("http://localhost:8000")
+            except Exception:
+                pass
+
+        threading.Thread(target=_open_browser, daemon=True).start()
 
     yield
     print("[Studio Server] Shutting down...")
+    try:
+        flag_file.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 app = FastAPI(
