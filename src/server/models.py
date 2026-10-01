@@ -65,6 +65,19 @@ class SubtitleSegmentModel(BaseModel):
     text: str
 
 
+class VideoTextBlockModel(BaseModel):
+    id: str
+    zone: str = "body_overlay"  # "bottom_sub" | "top_title" | "body_overlay"
+    start: float
+    end: float
+    box: dict[str, int]
+    text_zh: str
+    text_vi: str = ""
+    confidence: float = 0.9
+    style: str = "blur_box"  # "blur_box" | "solid_black" | "stroke_only"
+    is_enabled: bool = True
+
+
 class RenderConfigRequest(BaseModel):
     video_path: str
     mode: str = "translate"  # "translate" | "remix"
@@ -84,6 +97,7 @@ class RenderConfigRequest(BaseModel):
     watermark_text: str = "KEN STUDIO"
     is_orig_muted: bool = False
     audio_ducking: int = 12
+    ocr_blocks: list[VideoTextBlockModel] | None = None
 
 
 class SaveSubtitlesRequest(BaseModel):
@@ -126,3 +140,15 @@ class AutoTranslateRequest(BaseModel):
     model_size: str | None = None
     device: str | None = None
     voice: str = "vi-VN-HoaiMyNeural"
+
+
+
+class ScanOCRRequest(BaseModel):
+    video_path: str
+    sample_fps: float = 2.0
+    min_confidence: float = 0.60
+
+
+class SaveOCRBlocksRequest(BaseModel):
+    video_path: str
+    blocks: list[VideoTextBlockModel]

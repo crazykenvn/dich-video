@@ -312,11 +312,13 @@ def generate_studio_ass_file(
     box_width: int = 88,
     box_padding: int = 6,
     box_opacity: float | int = 100,
+    ocr_blocks: list[dict[str, Any]] | None = None,
 ) -> tuple[Path, dict[str, int] | None]:
     """Tạo file phụ đề ASS và tính tọa độ blur box khớp 1:1 với màn hình Studio Preview:
     - PlayResX & PlayResY khóa theo tỉ lệ chuẩn Studio Canvas (260x462 dọc hoặc 520x292 ngang).
     - Hộp đè (Box) được vẽ chính xác theo box_width % và vị trí sub_margin_v.
     - Chữ phụ đề được căn giữa chuẩn xác bên trong hộp đè.
+    - Hỗ trợ các khối OCR Text Blocks (chữ Trung trên video được dịch sang tiếng Việt).
     """
     font_map = {
         "font-bevietnam": "Be Vietnam Pro",
@@ -438,10 +440,19 @@ def generate_studio_ass_file(
             f"Style: Default,{resolved_font},{fs},{text_color},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,10,10,{margin_v},1"
         )
 
+    # Styles chuyên biệt cho Video OCR Text Overlays
+    ass_lines.append(
+        f"Style: OCRDefault,{resolved_font},13,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,1.5,0.5,5,0,0,0,1"
+    )
+    ass_lines.append(
+        "Style: OCRBoxBg,Arial,10,&H33251912,&H000000FF,&H33251912,&H33251912,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1"
+    )
+
     ass_lines.append("")
     ass_lines.append("[Events]")
     ass_lines.append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")
 
+    # 1. Thêm các câu thoại phụ đề chính (SRT)
     for seg in segments:
         t_start = to_ass_timestamp(seg.start)
         t_end = to_ass_timestamp(seg.end)
@@ -469,6 +480,67 @@ def generate_studio_ass_file(
             ass_lines.append(f"Dialogue: 1,{t_start},{t_end},Default,,0,0,{cur_tmv},,{txt}")
         else:
             ass_lines.append(f"Dialogue: 0,{t_start},{t_end},Default,,0,0,{margin_v},,{txt}")
+
+    # 2. Thêm các khối Video OCR Text Blocks (chữ trên hình ảnh video)
+    if ocr_blocks:
+        for block in ocr_blocks:
+            if not block.get("is_enabled", True):
+                continue
+            txt = (block.get("text_vi") or block.get("text_zh") or "").strip().replace("\n", "\\N")
+            if not txt:
+                continue
+
+            b_start = max(0.0, float(block.get("start", 0.0)))
+            b_end = max(b_start + 0.1, float(block.get("end", 0.0)))
+            t_start = to_ass_timestamp(b_start)
+            t_end = to_ass_timestamp(b_end)
+
+            box = block.get("box", {})
+            bx = int(box.get("x", 0))
+            by = int(box.get("y", 0))
+            bw = int(box.get("w", 100))
+            bh = int(box.get("h", 40))
+
+            ass_x1 = max(0, min(play_w - 2, int(round(bx / scale_x))))
+            ass_y1 = max(0, min(play_h - 2, int(round(by / scale_y))))
+            ass_x2 = max(ass_x1 + 2, min(play_w, int(round((bx + bw) / scale_x))))
+            ass_y2 = max(ass_y1 + 2, min(play_h, int(round((by + bh) / scale_y))))
+
+            ass_cx = (ass_x1 + ass_x2) // 2
+            ass_cy = (ass_y1 + ass_y2) // 2
+            ass_bw = max(10, ass_x2 - ass_x1)
+            ass_bh = max(10, ass_y2 - ass_y1)
+
+            b_style = block.get("style", "blur_box")
+            if b_style == "solid_black":
+                ocr_box_bgr = "000000"
+                ocr_box_alpha = "00"  # Đen đặc che hoàn toàn chữ gốc
+                draw_box = True
+            elif b_style == "blur_box":
+                ocr_box_bgr = "251912"  # Slate Navy mờ
+                ocr_box_alpha = "33"    # ~80% opacity
+                draw_box = True
+            else:
+                draw_box = False
+
+            if draw_box:
+                box_draw = (
+                    f"{{\\pos(0,0)\\p1\\1c&H{ocr_box_bgr}&\\1a&H{ocr_box_alpha}&\\3c&H{ocr_box_bgr}&\\3a&H{ocr_box_alpha}&\\bord0\\shad0}}"
+                    f"m {ass_x1} {ass_y1} l {ass_x2} {ass_y1} "
+                    f"l {ass_x2} {ass_y2} l {ass_x1} {ass_y2}{{\\p0}}"
+                )
+                ass_lines.append(f"Dialogue: 0,{t_start},{t_end},OCRBoxBg,,0,0,0,,{box_draw}")
+
+            # Tính toán cỡ chữ vừa vặn trong bounding box
+            cur_fs = max(8, min(24, int(round(ass_bh * 0.70))))
+            clean_txt = txt.replace("\\N", "")
+            est_w = len(clean_txt) * (cur_fs * 0.58)
+            if est_w > ass_bw * 1.15 and cur_fs > 8:
+                cur_fs = max(8, int(round(cur_fs * (ass_bw * 1.15 / est_w))))
+
+            ass_lines.append(
+                f"Dialogue: 2,{t_start},{t_end},OCRDefault,,0,0,0,,{{\\pos({ass_cx},{ass_cy})\\an5\\fs{cur_fs}}}{txt}"
+            )
 
     output_ass_path.parent.mkdir(parents=True, exist_ok=True)
     output_ass_path.write_text("\n".join(ass_lines), encoding="utf-8")
@@ -559,6 +631,7 @@ def mux_audio(
     video_quality: str = "high",
     anti_video: bool = False,
     anti_audio: bool = False,
+    ocr_blocks: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Ghép video gốc với audio mới và tùy chọn phụ đề/watermark/anti-detect.
     - original_mix: giữ ~12% tiếng gốc.
@@ -570,6 +643,7 @@ def mux_audio(
     - video_quality: 'high' (CRF 18 visually lossless - 100% gốc), 'medium' (CRF 22), 'gpu' (h264_mf 25M).
     - anti_video: Kỹ thuật 1 - crop 1.5% + scale + film grain + micro EQ.
     - anti_audio: Kỹ thuật 4 - biến điệu âm thanh gốc (pitch/tempo/eq) trước khi hòa âm.
+    - ocr_blocks: danh sách khối chữ cứng trên video cần làm mờ & đè text tiếng Việt.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = output_path.with_name(output_path.stem + ".tmp" + output_path.suffix)
@@ -614,13 +688,50 @@ def mux_audio(
         cur_v = "v_wm"
         need_video_encode = True
 
-    # 3. In phụ đề cứng khớp chuẩn 1:1 Preview Canvas Studio
+    # 3. Dynamic OCR Blur Filter Complex (với các khối OCR style == blur_box)
+    if ocr_blocks:
+        vw, vh = get_video_resolution(video_path)
+        blur_candidates = [
+            b for b in ocr_blocks
+            if b.get("is_enabled", True) and b.get("style", "blur_box") == "blur_box"
+        ]
+        for idx, block in enumerate(blur_candidates[:12]):
+            box = block.get("box", {})
+            bx = int(box.get("x", 0))
+            by = int(box.get("y", 0))
+            bw = int(box.get("w", 100))
+            bh = int(box.get("h", 40))
+
+            bx = max(0, min(vw - 4, bx))
+            by = max(0, min(vh - 4, by))
+            bw = min(vw - bx, max(4, bw))
+            bh = min(vh - by, max(4, bh))
+
+            if bx % 2 != 0: bx -= 1
+            if by % 2 != 0: by -= 1
+            if bw % 2 != 0: bw += 1
+            if bh % 2 != 0: bh += 1
+
+            t_start = max(0.0, float(block.get("start", 0.0)))
+            t_end = max(t_start + 0.1, float(block.get("end", 0.0)))
+
+            filter_complex_parts.append(
+                f"[{cur_v}]split=2[{cur_v}_base][{cur_v}_crop_{idx}];"
+                f"[{cur_v}_crop_{idx}]crop={bw}:{bh}:{bx}:{by},avgblur=18[{cur_v}_blur_{idx}];"
+                f"[{cur_v}_base][{cur_v}_blur_{idx}]overlay={bx}:{by}:enable='between(t,{t_start},{t_end})'[{cur_v}_done_{idx}]"
+            )
+            cur_v = f"{cur_v}_done_{idx}"
+            need_video_encode = True
+
+    # 4. In phụ đề cứng & các khối Video OCR khớp chuẩn 1:1 Preview Canvas Studio
     ass_tmp_file: Path | None = None
-    if burn_sub and srt_path is not None and Path(srt_path).exists():
+    has_sub_source = (burn_sub and srt_path is not None and Path(srt_path).exists()) or bool(ocr_blocks)
+    if has_sub_source:
         vw, vh = get_video_resolution(video_path)
         ass_tmp_file = output_path.parent / f"{output_path.stem}_render.ass"
+        dummy_srt = srt_path if (burn_sub and srt_path is not None and Path(srt_path).exists()) else (output_path.parent / "empty.srt")
         ass_file, blur_info = generate_studio_ass_file(
-            srt_path=Path(srt_path),
+            srt_path=Path(dummy_srt),
             output_ass_path=ass_tmp_file,
             video_width=vw,
             video_height=vh,
@@ -632,10 +743,11 @@ def mux_audio(
             box_width=box_width,
             box_padding=box_padding,
             box_opacity=box_opacity,
+            ocr_blocks=ocr_blocks,
         )
         ass_escaped = str(ass_file.resolve()).replace("\\", "/").replace(":", r"\:")
 
-        if blur_info:
+        if blur_info and burn_sub:
             bx, by, bw, bh = blur_info["x"], blur_info["y"], blur_info["w"], blur_info["h"]
             filter_complex_parts.append(
                 f"[{cur_v}]split=2[{cur_v}_base][{cur_v}_blur_src];"
@@ -746,12 +858,13 @@ def remix_video(
     box_padding: int = 5,
     box_width: int = 88,
     box_opacity: float | int = 100,
+    ocr_blocks: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Xử lý video nhanh không cần dịch:
     - Biến điệu âm thanh gốc (giữ tiếng gốc nhưng phá vỡ Acoustic Fingerprint).
     - Xử lý hình ảnh chống quét (Micro-Crop 1.5%, Film grain, Micro-EQ).
     - Chèn Watermark/Logo mờ chuyển động.
-    - Tùy chọn in phụ đề nếu có file srt.
+    - Tùy chọn in phụ đề nếu có file srt hoặc ocr_blocks.
     - Mã hóa chất lượng cao (mặc định CRF 18).
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -795,13 +908,50 @@ def remix_video(
         cur_v = "v_wm"
         need_video_encode = True
 
-    # 3. Chèn phụ đề nếu có
+    # 3. Dynamic OCR Blur Filter Complex (với các khối OCR style == blur_box)
+    if ocr_blocks:
+        vw, vh = get_video_resolution(video_path)
+        blur_candidates = [
+            b for b in ocr_blocks
+            if b.get("is_enabled", True) and b.get("style", "blur_box") == "blur_box"
+        ]
+        for idx, block in enumerate(blur_candidates[:12]):
+            box = block.get("box", {})
+            bx = int(box.get("x", 0))
+            by = int(box.get("y", 0))
+            bw = int(box.get("w", 100))
+            bh = int(box.get("h", 40))
+
+            bx = max(0, min(vw - 4, bx))
+            by = max(0, min(vh - 4, by))
+            bw = min(vw - bx, max(4, bw))
+            bh = min(vh - by, max(4, bh))
+
+            if bx % 2 != 0: bx -= 1
+            if by % 2 != 0: by -= 1
+            if bw % 2 != 0: bw += 1
+            if bh % 2 != 0: bh += 1
+
+            t_start = max(0.0, float(block.get("start", 0.0)))
+            t_end = max(t_start + 0.1, float(block.get("end", 0.0)))
+
+            filter_complex_parts.append(
+                f"[{cur_v}]split=2[{cur_v}_base][{cur_v}_crop_{idx}];"
+                f"[{cur_v}_crop_{idx}]crop={bw}:{bh}:{bx}:{by},avgblur=18[{cur_v}_blur_{idx}];"
+                f"[{cur_v}_base][{cur_v}_blur_{idx}]overlay={bx}:{by}:enable='between(t,{t_start},{t_end})'[{cur_v}_done_{idx}]"
+            )
+            cur_v = f"{cur_v}_done_{idx}"
+            need_video_encode = True
+
+    # 4. Chèn phụ đề & Video OCR nếu có
     ass_tmp_file: Path | None = None
-    if burn_sub and srt_path is not None and Path(srt_path).exists():
+    has_sub_source = (burn_sub and srt_path is not None and Path(srt_path).exists()) or bool(ocr_blocks)
+    if has_sub_source:
         vw, vh = get_video_resolution(video_path)
         ass_tmp_file = output_path.parent / f"{output_path.stem}_render.ass"
+        dummy_srt = srt_path if (burn_sub and srt_path is not None and Path(srt_path).exists()) else (output_path.parent / "empty.srt")
         ass_file, blur_info = generate_studio_ass_file(
-            srt_path=Path(srt_path),
+            srt_path=Path(dummy_srt),
             output_ass_path=ass_tmp_file,
             video_width=vw,
             video_height=vh,
@@ -813,10 +963,11 @@ def remix_video(
             box_width=box_width,
             box_padding=box_padding,
             box_opacity=box_opacity,
+            ocr_blocks=ocr_blocks,
         )
         ass_escaped = str(ass_file.resolve()).replace("\\", "/").replace(":", r"\:")
 
-        if blur_info:
+        if blur_info and burn_sub:
             bx, by, bw, bh = blur_info["x"], blur_info["y"], blur_info["w"], blur_info["h"]
             filter_complex_parts.append(
                 f"[{cur_v}]split=2[{cur_v}_base][{cur_v}_blur_src];"
@@ -829,7 +980,7 @@ def remix_video(
         cur_v = "v_sub"
         need_video_encode = True
 
-    # 4. Biến điệu âm thanh gốc
+    # 5. Biến điệu âm thanh gốc
     audio_map = "0:a:0"
     if anti_audio:
         filter_complex_parts.append(f"[0:a]{get_audio_anti_detect_filter()}[a_anti]")
@@ -910,6 +1061,7 @@ def burn_subtitles(
     watermark_opacity: float = 0.18,
     watermark_motion: str = "drift",
     watermark_width: int = 180,
+    ocr_blocks: list[dict[str, Any]] | None = None,
     **kwargs: Any,
 ) -> Path:
     return remix_video(
@@ -933,6 +1085,7 @@ def burn_subtitles(
         box_padding=box_padding,
         box_width=box_width,
         box_opacity=box_opacity,
+        ocr_blocks=ocr_blocks,
     )
 
 

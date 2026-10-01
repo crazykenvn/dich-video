@@ -8,7 +8,7 @@ import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from ...config import OUTPUT_DIR
@@ -28,11 +28,15 @@ from ...subtitles import read_srt, write_srt
 from ...transcribe import Segment, Transcriber
 from ...translate import Translator
 from ...tts import build_dub_track
+from ...video_ocr import VideoOCRScanner, VideoTextBlock, load_ocr_blocks, save_ocr_blocks
 from ..models import (
     AutoTranslateRequest,
     GenerateDubAudioRequest,
     RenderConfigRequest,
+    SaveOCRBlocksRequest,
     SaveSubtitlesRequest,
+    ScanOCRRequest,
+    VideoTextBlockModel,
 )
 from .videos import resolve_video_path
 
@@ -809,6 +813,15 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
             except Exception as e:
                 print(f"[studio export] Lỗi tạo watermark text: {e}")
 
+    # Nạp danh sách Video OCR Text Blocks nếu có để làm mờ chữ gốc và in bản dịch
+    ocr_blocks_data = None
+    if req.ocr_blocks is not None:
+        ocr_blocks_data = [b.model_dump() for b in req.ocr_blocks]
+    else:
+        loaded_ocr = load_ocr_blocks(target_p)
+        if loaded_ocr:
+            ocr_blocks_data = [b.to_dict() for b in loaded_ocr]
+
     try:
         # Nếu là chế độ Remix HOẶC người dùng xóa hết phụ đề (không có segments) -> Không đè phụ đề rác
         if req.mode == "remix" or not req.segments:
@@ -823,6 +836,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                 watermark_enabled=req.watermark_enabled,
                 watermark_path=actual_wm_path,
                 video_quality="gpu",
+                ocr_blocks=ocr_blocks_data,
             )
             out_filename = out_path.name
         else:
@@ -853,7 +867,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                 except Exception as e_tts:
                     print(f"[studio export] Cảnh báo tạo voiceover: {e_tts}")
 
-            # 2. Render video thành phẩm: hòa âm tiếng Việt + đè phụ đề chuẩn Canvas + watermark
+            # 2. Render video thành phẩm: hòa âm tiếng Việt + đè phụ đề chuẩn Canvas + watermark + OCR
             if dub_wav.exists():
                 orig_mix = 0.0 if req.is_orig_muted else (float(req.audio_ducking or 12) / 100.0)
                 out_path = mux_audio(
@@ -875,6 +889,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                     anti_video=True,
                     anti_audio=req.pitch_shift,
                     video_quality="gpu",
+                    ocr_blocks=ocr_blocks_data,
                 )
             else:
                 out_path = burn_subtitles(
@@ -893,6 +908,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                     anti_video=True,
                     anti_audio=req.pitch_shift,
                     video_quality="gpu",
+                    ocr_blocks=ocr_blocks_data,
                 )
             out_filename = out_path.name
 
@@ -932,3 +948,120 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
     except Exception as e:
         print(f"[studio export] Lỗi xử lý render: {e}")
         raise HTTPException(status_code=500, detail=f"Lỗi render video: {e}")
+
+
+# ==========================================
+# VIDEO OCR: PHÁT HIỆN & DỊCH SUB CỨNG / TEXT RẢI RÁC
+# ==========================================
+
+ACTIVE_OCR_SCANS: dict[str, dict[str, Any]] = {}
+
+
+@router.post("/scan-ocr")
+def scan_video_ocr(req: ScanOCRRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    """Khởi chạy quét OCR phát hiện phụ đề cứng và chữ nổi rải rác trên video trong nền."""
+    target_p = resolve_video_path(req.video_path)
+    if not target_p.exists() or not target_p.is_file():
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy video: {req.video_path}")
+
+    video_key = str(target_p.resolve())
+    if video_key in ACTIVE_OCR_SCANS and ACTIVE_OCR_SCANS[video_key].get("status") == "running":
+        return {
+            "status": "running",
+            "message": ACTIVE_OCR_SCANS[video_key].get("message", "Đang quét OCR..."),
+            "progress": ACTIVE_OCR_SCANS[video_key].get("progress", 10),
+        }
+
+    ACTIVE_OCR_SCANS[video_key] = {
+        "status": "running",
+        "progress": 5,
+        "message": "Khởi động RapidOCR Engine...",
+        "blocks": [],
+    }
+
+    def _run_ocr_scan():
+        try:
+            def _prog(msg: str, pct: float):
+                ACTIVE_OCR_SCANS[video_key]["progress"] = pct
+                ACTIVE_OCR_SCANS[video_key]["message"] = msg
+
+            scanner = VideoOCRScanner(
+                sample_fps=req.sample_fps or 2.0,
+                min_confidence=req.min_confidence or 0.60,
+            )
+            blocks = scanner.scan_video(target_p, progress_callback=_prog)
+            ACTIVE_OCR_SCANS[video_key]["status"] = "completed"
+            ACTIVE_OCR_SCANS[video_key]["progress"] = 100
+            ACTIVE_OCR_SCANS[video_key]["message"] = f"Đã quét và dịch thành công {len(blocks)} khối chữ!"
+            ACTIVE_OCR_SCANS[video_key]["blocks"] = [b.to_dict() for b in blocks]
+        except Exception as e:
+            print(f"[studio scan_ocr] Lỗi: {e}")
+            ACTIVE_OCR_SCANS[video_key]["status"] = "error"
+            ACTIVE_OCR_SCANS[video_key]["message"] = f"Lỗi quét OCR: {e}"
+
+    background_tasks.add_task(_run_ocr_scan)
+    return {"status": "started", "message": "Đã bắt đầu tiến trình quét Video OCR trong nền."}
+
+
+@router.get("/ocr-status")
+def get_ocr_status(video_path: str = Query(..., description="Đường dẫn file video")) -> dict[str, Any]:
+    """Kiểm tra tiến trình quét OCR realtime của video."""
+    try:
+        target_p = resolve_video_path(video_path)
+    except Exception:
+        return {"status": "idle", "progress": 0, "message": "Video không hợp lệ", "blocks": []}
+
+    video_key = str(target_p.resolve())
+    if video_key in ACTIVE_OCR_SCANS:
+        return ACTIVE_OCR_SCANS[video_key]
+
+    saved = load_ocr_blocks(target_p)
+    if saved:
+        return {
+            "status": "completed",
+            "progress": 100,
+            "message": f"Đã nạp {len(saved)} khối chữ đã lưu từ trước.",
+            "blocks": [b.to_dict() for b in saved],
+        }
+
+    return {"status": "idle", "progress": 0, "message": "Chưa quét OCR", "blocks": []}
+
+
+@router.get("/ocr-blocks")
+def get_ocr_blocks(video_path: str = Query(..., description="Đường dẫn file video")) -> dict[str, Any]:
+    """Lấy danh sách toàn bộ các khối chữ OCR đã phát hiện và dịch của video."""
+    target_p = resolve_video_path(video_path)
+    blocks = load_ocr_blocks(target_p)
+    return {
+        "video_path": str(target_p.resolve()),
+        "total_blocks": len(blocks),
+        "blocks": [b.to_dict() for b in blocks],
+    }
+
+
+@router.post("/save-ocr-blocks")
+def save_ocr_blocks_endpoint(req: SaveOCRBlocksRequest) -> dict[str, Any]:
+    """Lưu trữ các chỉnh sửa (bản dịch, vị trí, bật/tắt) của người dùng đối với các khối chữ OCR."""
+    target_p = resolve_video_path(req.video_path)
+    block_objs = [
+        VideoTextBlock(
+            id=b.id,
+            zone=b.zone,
+            start=b.start,
+            end=b.end,
+            box=b.box,
+            text_zh=b.text_zh,
+            text_vi=b.text_vi,
+            confidence=b.confidence,
+            style=b.style,
+            is_enabled=b.is_enabled,
+        )
+        for b in req.blocks
+    ]
+    json_path = save_ocr_blocks(target_p, block_objs)
+    return {
+        "success": True,
+        "message": f"Đã lưu thành công {len(block_objs)} khối chữ OCR vào dự án!",
+        "json_path": str(json_path),
+        "total_blocks": len(block_objs),
+    }

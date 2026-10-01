@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Pause, SkipBack, SkipForward, Scissors, Plus, Trash2, 
   Sparkles, Sliders, Type, Layers, Check, Download, Video, ArrowRight,
-  Volume2, VolumeX, Magnet, Maximize2, Radio, Upload, Image as ImageIcon
+  Volume2, VolumeX, Magnet, Maximize2, Radio, Upload, Image as ImageIcon,
+  Scan, Search, Eye, EyeOff
 } from 'lucide-react';
 import * as api from '../services/api';
 
@@ -20,8 +21,19 @@ export default function StudioScreen({
   const [currentSeconds, setCurrentSeconds] = useState(0);
   const [totalSeconds, setTotalSeconds] = useState(0);
   const [videoDims, setVideoDims] = useState('');
+  const [rawVideoWidth, setRawVideoWidth] = useState(1080);
+  const [rawVideoHeight, setRawVideoHeight] = useState(1920);
   const [aspectRatio, setAspectRatio] = useState('9:16');
   const [previewFrameUrl, setPreviewFrameUrl] = useState(null);
+
+  // Video OCR State (Sub cứng & Chữ rải rác trên màn hình)
+  const [ocrBlocks, setOcrBlocks] = useState([]);
+  const [isScanningOCR, setIsScanningOCR] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrMessage, setOcrMessage] = useState('');
+  const [activeOCRBlockId, setActiveOCRBlockId] = useState(null);
+  const [showOCROverlays, setShowOCROverlays] = useState(true);
+  const ocrPollTimerRef = useRef(null);
 
   // Subtitle Bounding Box state
   const [marginV, setMarginV] = useState(38); // px from bottom
@@ -132,6 +144,16 @@ export default function StudioScreen({
           setDubAudioSize(0);
         }
       });
+
+      // Nạp các khối chữ OCR đã quét nếu có
+      api.getOCRBlocks(selectedVideo.path).then(res => {
+        if (res && res.blocks) {
+          setOcrBlocks(res.blocks);
+        } else {
+          setOcrBlocks([]);
+        }
+      }).catch(() => setOcrBlocks([]));
+
       if (videoRef.current) {
         videoRef.current.currentTime = 0;
         videoRef.current.pause();
@@ -146,6 +168,9 @@ export default function StudioScreen({
       // Khi không có video: đưa toàn bộ trạng thái về trắng/trống hoàn toàn
       setSegments([]);
       setActiveSegmentId(null);
+      setOcrBlocks([]);
+      setActiveOCRBlockId(null);
+      setIsScanningOCR(false);
       setHasDubAudio(false);
       setDubAudioUrl(null);
       setDubAudioFilename(null);
@@ -221,6 +246,8 @@ export default function StudioScreen({
     const info = await api.getVideoInfo(vPath);
     if (info) {
       setVideoDims(`${info.width} × ${info.height} px (${info.aspect_ratio || '9:16'})`);
+      if (info.width) setRawVideoWidth(info.width);
+      if (info.height) setRawVideoHeight(info.height);
       if (info.duration_sec) setTotalSeconds(info.duration_sec);
     }
 
@@ -524,8 +551,76 @@ export default function StudioScreen({
   useEffect(() => {
     return () => {
       if (translatePollTimerRef.current) clearInterval(translatePollTimerRef.current);
+      if (ocrPollTimerRef.current) clearInterval(ocrPollTimerRef.current);
     };
   }, []);
+
+  const handleStartOCRScan = async () => {
+    if (!selectedVideo?.path) {
+      showToast('Vui lòng chọn hoặc nạp một video trước khi quét OCR!', 'warning');
+      return;
+    }
+    setIsScanningOCR(true);
+    setOcrProgress(5);
+    setOcrMessage('Đang khởi động RapidOCR Engine...');
+    showToast('🔍 Đang quét và bóc tách chữ tiếng Trung trên video bằng GPU...', 'info');
+
+    try {
+      const res = await api.scanOCR(selectedVideo.path, 2.0, 0.55);
+      if (res && (res.status === 'started' || res.status === 'running')) {
+        if (ocrPollTimerRef.current) clearInterval(ocrPollTimerRef.current);
+        ocrPollTimerRef.current = setInterval(async () => {
+          try {
+            const statusRes = await api.getOCRStatus(selectedVideo.path);
+            if (statusRes) {
+              if (statusRes.progress !== undefined) setOcrProgress(statusRes.progress);
+              if (statusRes.message) setOcrMessage(statusRes.message);
+
+              if (statusRes.status === 'completed') {
+                clearInterval(ocrPollTimerRef.current);
+                ocrPollTimerRef.current = null;
+                setIsScanningOCR(false);
+                setOcrBlocks(statusRes.blocks || []);
+                showToast(`✓ Đã phát hiện và dịch thành công ${statusRes.blocks?.length || 0} khối chữ trên video!`, 'success');
+              } else if (statusRes.status === 'error') {
+                clearInterval(ocrPollTimerRef.current);
+                ocrPollTimerRef.current = null;
+                setIsScanningOCR(false);
+                showToast(`❌ Lỗi quét OCR: ${statusRes.message}`, 'error');
+              }
+            }
+          } catch (e) {
+            console.warn('Poll OCR status error:', e);
+          }
+        }, 800);
+      }
+    } catch (err) {
+      setIsScanningOCR(false);
+      showToast('❌ Không thể khởi chạy tiến trình quét OCR!', 'error');
+    }
+  };
+
+  const handleUpdateOCRBlock = (blockId, updates) => {
+    setOcrBlocks(prev => {
+      const next = prev.map(b => (b.id === blockId ? { ...b, ...updates } : b));
+      if (selectedVideo?.path) {
+        api.saveOCRBlocks(selectedVideo.path, next);
+      }
+      return next;
+    });
+  };
+
+  const handleDeleteOCRBlock = (blockId) => {
+    setOcrBlocks(prev => {
+      const next = prev.filter(b => b.id !== blockId);
+      if (selectedVideo?.path) {
+        api.saveOCRBlocks(selectedVideo.path, next);
+      }
+      return next;
+    });
+    if (activeOCRBlockId === blockId) setActiveOCRBlockId(null);
+    showToast('✓ Đã xóa khối chữ khỏi danh sách', 'info');
+  };
 
   const handleStartAutoTranslate = async () => {
     if (!selectedVideo?.path) {
@@ -682,6 +777,7 @@ export default function StudioScreen({
         watermark_text: watermarkText,
         is_orig_muted: isOrigMuted,
         audio_ducking: audioDucking,
+        ocr_blocks: ocrBlocks,
       });
 
       clearInterval(progressTimer);
@@ -914,6 +1010,86 @@ export default function StudioScreen({
               </div>
             )}
 
+            {/* FLOATING VIDEO OCR TEXT OVERLAYS (SUB CỨNG & CHỮ RẢI RÁC) */}
+            {selectedVideo?.path && showOCROverlays && ocrBlocks && ocrBlocks.map((block) => {
+              const isVisible = currentSeconds >= block.start && currentSeconds <= block.end;
+              if (!isVisible || !block.is_enabled) return null;
+
+              const vw = rawVideoWidth || 1080;
+              const vh = rawVideoHeight || 1920;
+              const leftPct = (block.box.x / vw) * 100;
+              const topPct = (block.box.y / vh) * 100;
+              const widthPct = (block.box.w / vw) * 100;
+              const heightPct = (block.box.h / vh) * 100;
+              const isSelected = activeOCRBlockId === block.id;
+
+              return (
+                <div
+                  key={block.id}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveOCRBlockId(isSelected ? null : block.id);
+                  }}
+                  style={{
+                    left: `${leftPct}%`,
+                    top: `${topPct}%`,
+                    width: `${Math.max(12, widthPct)}%`,
+                    minHeight: `${Math.max(4, heightPct)}%`,
+                  }}
+                  className={`absolute z-20 transition-all cursor-pointer select-none flex items-center justify-center text-center px-1.5 py-0.5 rounded ${
+                    block.style === 'solid_black' ? 'bg-black/95 text-white border border-slate-700' :
+                    block.style === 'stroke_only' ? 'bg-transparent text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]' :
+                    'bg-slate-950/80 backdrop-blur-md text-white border border-amber-400/50 shadow-lg'
+                  } ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-black/60 z-30' : 'hover:ring-1 hover:ring-amber-400/70'}`}
+                >
+                  <span className="text-[11px] leading-tight font-medium drop-shadow-sm font-sans break-words line-clamp-2">
+                    {block.text_vi || block.text_zh}
+                  </span>
+
+                  {/* Popover editor khi click vào khối OCR */}
+                  {isSelected && (
+                    <div 
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 w-64 bg-[#141b2d] border border-amber-500/60 rounded-xl p-2.5 shadow-2xl z-40 space-y-2 pointer-events-auto text-left"
+                    >
+                      <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                        <span className="text-amber-400 font-bold">[{block.start}s → {block.end}s]</span>
+                        <span>{block.zone === 'top_title' ? '🏷️ Tiêu đề' : block.zone === 'bottom_sub' ? '💬 Sub thoại' : '📌 Chữ rải rác'}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-300 font-mono bg-slate-950/80 p-1 rounded truncate">
+                        Gốc: {block.text_zh}
+                      </div>
+                      <input
+                        type="text"
+                        value={block.text_vi}
+                        onChange={(e) => handleUpdateOCRBlock(block.id, { text_vi: e.target.value })}
+                        placeholder="Nhập bản dịch tiếng Việt..."
+                        className="w-full bg-slate-900 border border-slate-700 focus:border-amber-400 rounded px-2 py-1 text-xs text-white outline-none"
+                      />
+                      <div className="flex items-center justify-between gap-1 pt-0.5 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateOCRBlock(block.id, { 
+                            style: block.style === 'blur_box' ? 'solid_black' : block.style === 'solid_black' ? 'stroke_only' : 'blur_box' 
+                          })}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 cursor-pointer"
+                        >
+                          Kiểu: {block.style === 'blur_box' ? 'Kính mờ' : block.style === 'solid_black' ? 'Hộp đen' : 'Viền'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteOCRBlock(block.id)}
+                          className="px-2 py-0.5 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 cursor-pointer"
+                        >
+                          Xóa
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
             {/* SUBTITLE BOUNDING BOX (KÉO THẢ & CO GIÃN 8 HANDLE) */}
             {selectedVideo?.path && workflowMode === 'translate' && activeSegment && (
               <div
@@ -1089,6 +1265,85 @@ export default function StudioScreen({
                   </div>
                 </div>
               )}
+
+              {/* VIDEO OCR SCANNER CARD */}
+              <div className="bg-gradient-to-br from-amber-950/40 via-slate-900 to-slate-950 p-3 rounded-xl border border-amber-500/30 shadow-md space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                    <Scan className="w-3.5 h-3.5 text-amber-400" />
+                    <span>QUÉT CHỮ & SUB CỨNG (VIDEO OCR)</span>
+                  </span>
+                  <span className="text-[9px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-mono border border-amber-500/30">
+                    RapidOCR GPU
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  Phát hiện phụ đề cứng, tiêu đề giật tít và chữ tiếng Trung rải rác trên video để dịch sang tiếng Việt và che mờ chữ gốc.
+                </p>
+                <div className="flex items-center gap-2 pt-0.5">
+                  <button
+                    onClick={handleStartOCRScan}
+                    disabled={!selectedVideo || isScanningOCR}
+                    className="flex-1 py-1.5 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 font-extrabold text-xs rounded-lg shadow-md transition active:scale-95 disabled:opacity-40 flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                    <span>{isScanningOCR ? 'Đang Quét OCR...' : (ocrBlocks.length > 0 ? `Quét Lại OCR (${ocrBlocks.length} khối)` : 'Quét Chữ Trên Video')}</span>
+                  </button>
+                  {ocrBlocks.length > 0 && (
+                    <button
+                      onClick={() => setShowOCROverlays(!showOCROverlays)}
+                      className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition flex items-center gap-1 cursor-pointer ${
+                        showOCROverlays
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                          : 'bg-slate-800 text-slate-400 border-slate-700'
+                      }`}
+                      title="Bật/Tắt hiển thị các khối chữ OCR trên video"
+                    >
+                      {showOCROverlays ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                      <span>{showOCROverlays ? 'Bật' : 'Tắt'}</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Danh sách các khối chữ OCR đã quét */}
+                {ocrBlocks.length > 0 && (
+                  <div className="pt-2 border-t border-slate-800/80 space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    <span className="text-[10px] text-slate-400 block font-semibold">
+                      Đã phát hiện {ocrBlocks.length} khối chữ (nhấp để chuyển kim playhead):
+                    </span>
+                    {ocrBlocks.map((b) => (
+                      <div
+                        key={b.id}
+                        onClick={() => {
+                          seekTo(b.start);
+                          setActiveOCRBlockId(b.id);
+                        }}
+                        className={`p-2 rounded-lg border text-[11px] transition cursor-pointer flex flex-col gap-1 ${
+                          activeOCRBlockId === b.id
+                            ? 'bg-amber-500/20 border-amber-500/60 text-white'
+                            : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between font-mono text-[10px]">
+                          <span className="text-amber-400 font-bold">[{b.start}s - {b.end}s]</span>
+                          <span className="text-[9px] px-1 rounded bg-slate-800 text-slate-400">
+                            {b.zone === 'top_title' ? '🏷️ Tiêu đề' : b.zone === 'bottom_sub' ? '💬 Sub thoại' : '📌 Ghi chú'}
+                          </span>
+                        </div>
+                        <div className="text-slate-400 text-[10px] font-mono truncate">
+                          Gốc: {b.text_zh}
+                        </div>
+                        <div className="text-white font-semibold flex items-center justify-between">
+                          <span className="truncate">{b.text_vi || b.text_zh}</span>
+                          <span className="text-[9px] text-sky-400 font-mono shrink-0 ml-1">
+                            {b.style === 'blur_box' ? 'Kính mờ' : b.style === 'solid_black' ? 'Hộp đen' : 'Viền'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
@@ -1599,6 +1854,16 @@ export default function StudioScreen({
               <span className="font-bold text-[11px]">Lưu Dự Án</span>
             </button>
 
+            <button
+              onClick={handleStartOCRScan}
+              disabled={!selectedVideo || isScanningOCR}
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 hover:text-white rounded-md border border-amber-500/40 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              title="Quét chữ & sub cứng trên video bằng RapidOCR"
+            >
+              <Scan className="w-3.5 h-3.5 text-amber-400" />
+              <span className="font-bold text-[11px]">{isScanningOCR ? 'Đang Quét...' : (ocrBlocks.length > 0 ? `OCR (${ocrBlocks.length})` : 'Quét OCR')}</span>
+            </button>
+
             <div className="w-px h-4 bg-slate-800 mx-0.5"></div>
 
             <button
@@ -1764,6 +2029,12 @@ export default function StudioScreen({
               <span className="flex items-center gap-1 font-semibold text-sky-400">💬 Sub AI</span>
               <span className="text-[9px] bg-sky-500/20 px-1 py-0.2 rounded text-sky-300">VI</span>
             </div>
+            {ocrBlocks.length > 0 && (
+              <div className="h-7 border-b border-slate-800/80 px-2 flex items-center justify-between text-[10px] text-amber-300 bg-slate-900/80">
+                <span className="flex items-center gap-1 font-semibold truncate">🏷️ Chữ Video</span>
+                <span className="text-[8px] bg-amber-500/20 px-1 rounded font-mono">{ocrBlocks.length}</span>
+              </div>
+            )}
             <div className="h-20 px-2 flex flex-col justify-center text-[11px] text-slate-400 gap-1 bg-slate-900/40">
               <div className="flex items-center justify-between">
                 <span className="flex items-center gap-1 font-semibold text-slate-300">🎬 Video</span>
@@ -1897,6 +2168,39 @@ export default function StudioScreen({
                 })
               )}
             </div>
+
+            {/* OCR On-Screen Text Track */}
+            {ocrBlocks.length > 0 && (
+              <div className="h-7 border-b border-slate-800/80 bg-slate-950/40 relative px-1 py-0.5 flex items-center">
+                {ocrBlocks.map(block => {
+                  const isAct = block.id === activeOCRBlockId;
+                  const leftPct = totalSeconds > 0 ? (block.start / totalSeconds) * 100 : 0;
+                  const widthPct = totalSeconds > 0 ? ((block.end - block.start) / totalSeconds) * 100 : 8;
+
+                  return (
+                    <div
+                      key={block.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveOCRBlockId(block.id);
+                        seekTo(block.start);
+                      }}
+                      style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, 4)}%` }}
+                      className={`absolute h-5 rounded px-1.5 cursor-pointer transition flex items-center justify-between text-[9px] font-mono truncate select-none ${
+                        isAct
+                          ? 'bg-amber-400 text-slate-950 font-bold border border-white shadow-md'
+                          : block.is_enabled
+                          ? 'bg-amber-500/25 hover:bg-amber-500/40 text-amber-200 border border-amber-500/40'
+                          : 'bg-slate-800/50 text-slate-500 border border-slate-700/50 line-through'
+                      }`}
+                      title={`[${block.start}s - ${block.end}s] ${block.text_vi || block.text_zh}`}
+                    >
+                      <span className="truncate">{block.text_vi || block.text_zh}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Video Clip Strip (16 Frame Filmstrip + Audio Waveform) */}
             <div className="h-20 bg-slate-950/80 relative px-1 py-1.5 flex items-center">
@@ -2205,6 +2509,40 @@ export default function StudioScreen({
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* OCR SCANNING PROGRESS MODAL */}
+      {isScanningOCR && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
+          <div className="bg-[#141b2d] border border-amber-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 animate-pulse">
+                <Scan className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white">Quét Chữ & Sub Cứng Video OCR</h3>
+                <p className="text-xs text-slate-400 font-mono">RapidOCR ONNX DirectML • RTX 3060</p>
+              </div>
+            </div>
+            
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs font-mono">
+                <span className="text-slate-300">{ocrMessage || 'Đang quét khung hình...'}</span>
+                <span className="text-amber-400 font-bold">{ocrProgress}%</span>
+              </div>
+              <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                <div 
+                  className="h-full bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-400 transition-all duration-300 rounded-full"
+                  style={{ width: `${ocrProgress}%` }}
+                />
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-400 text-center leading-relaxed">
+              Hệ thống đang trích xuất frame, bóc tách chữ Hán qua mô hình PP-OCRv4 và tự động dịch ngữ cảnh sang tiếng Việt.
+            </p>
           </div>
         </div>
       )}

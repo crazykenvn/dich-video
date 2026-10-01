@@ -152,6 +152,20 @@ export const importSrt = async (file, videoPath) => {
   }
 };
 
+// 3.1. Video OCR: Phát hiện & Dịch chữ rải rác
+export const scanOCR = (videoPath, sampleFps = 2.0, minConfidence = 0.60) => apiFetch('/api/studio/scan-ocr', {
+  method: 'POST',
+  body: JSON.stringify({ video_path: videoPath, sample_fps: sampleFps, min_confidence: minConfidence })
+});
+export const getOCRStatus = (videoPath) =>
+  apiFetch(`/api/studio/ocr-status?video_path=${encodeURIComponent(videoPath)}`);
+export const getOCRBlocks = (videoPath) =>
+  apiFetch(`/api/studio/ocr-blocks?video_path=${encodeURIComponent(videoPath)}`);
+export const saveOCRBlocks = (videoPath, blocks) => apiFetch('/api/studio/save-ocr-blocks', {
+  method: 'POST',
+  body: JSON.stringify({ video_path: videoPath, blocks })
+});
+
 // 4. Phân phối Đa nền tảng
 export const getPublishSubfolders = () =>
   apiFetch('/api/publishing/subfolders');
