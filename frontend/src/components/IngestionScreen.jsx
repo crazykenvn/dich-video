@@ -32,6 +32,8 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
   const [isSavingCookie, setIsSavingCookie] = useState(false);
   const [isCheckingDouyinStatus, setIsCheckingDouyinStatus] = useState(false);
   const [isLaunchingEdge, setIsLaunchingEdge] = useState(false);
+  const [isUploadingCookieFile, setIsUploadingCookieFile] = useState(false);
+  const cookieFileInputRef = useRef(null);
 
   // Multi-selection & Pagination state
   const [selectedVideoKeys, setSelectedVideoKeys] = useState(new Set());
@@ -539,11 +541,38 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
     setShowDouyinLoginModal(true);
   };
 
-  // Lưu Cookie Douyin do người dùng dán vào (nhanh nhất, 5s)
+  // Nạp file Cookie JSON từ extension (Cookie-Editor, EditThisCookie, J2Team...)
+  const handleCookieFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingCookieFile(true);
+    try {
+      const res = await api.uploadDouyinCookieFile(file);
+      if (res && res.success) {
+        setIsDouyinLoggedIn(Boolean(res.logged_in));
+        showToast(res.message, 'success');
+        if (res.logged_in) {
+          setShowDouyinLoginModal(false);
+          setDouyinCookieInput('');
+        } else {
+          showToast('⚠️ File cookie chưa có sessionid đăng nhập. Hãy đảm bảo bạn đã đăng nhập nick trên Douyin trước khi Export!', 'warning');
+        }
+      } else {
+        showToast('❌ ' + (res?.message || 'Không thể lưu cookie từ file'), 'error');
+      }
+    } catch (err) {
+      showToast('❌ Lỗi nạp file: ' + err.message, 'error');
+    } finally {
+      setIsUploadingCookieFile(false);
+      if (cookieFileInputRef.current) cookieFileInputRef.current.value = '';
+    }
+  };
+
+  // Lưu Cookie / JSON Douyin do người dùng dán vào (JSON hoặc text)
   const handleSaveDouyinCookie = async () => {
     const raw = douyinCookieInput.trim();
     if (!raw) {
-      showToast('Vui lòng dán chuỗi cookie vào ô nhập!', 'warning');
+      showToast('Vui lòng dán nội dung JSON hoặc cookie vào ô nhập!', 'warning');
       return;
     }
     setIsSavingCookie(true);
@@ -559,7 +588,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
           showToast('⚠️ Đã lưu cookie nhưng chưa thấy sessionid đăng nhập. Hãy đảm bảo bạn đã đăng nhập tài khoản trên Douyin!', 'warning');
         }
       } else {
-        showToast('❌ Lỗi: ' + (res?.detail || 'Không thể lưu cookie'), 'error');
+        showToast('❌ Lỗi: ' + (res?.detail || res?.message || 'Không thể lưu cookie'), 'error');
       }
     } catch (err) {
       showToast('❌ Lỗi: ' + err.message, 'error');
@@ -1769,32 +1798,77 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
               </button>
             </div>
 
-            {/* CÁCH 1: DÁN COOKIE TỪ TRÌNH DUYỆT (KHUYÊN DÙNG) */}
-            <div className="p-4 bg-slate-950/70 border border-sky-500/30 rounded-xl space-y-3">
+            {/* CÁCH 1: NẠP FILE COOKIE HOẶC DÁN JSON (KHUYÊN DÙNG NHẤT) */}
+            <div className="p-4 bg-slate-950/70 border border-sky-500/30 rounded-xl space-y-4">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-sky-400 uppercase tracking-wide flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Cách 1: Dán Cookie (Khuyên dùng - Nhanh 5 giây)
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Nạp Cookie JSON (Không Cần Quét QR)
                 </span>
-                <span className="text-[10px] bg-sky-500/20 text-sky-300 px-2 py-0.5 rounded-full font-semibold">
-                  Đã đăng nhập trên Edge/Chrome
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-semibold">
+                  Khuyên dùng • Nhanh 1 chạm
                 </span>
               </div>
 
-              <div className="text-[11px] text-slate-400 space-y-1.5 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                <p className="font-medium text-slate-300">Vì bạn đã đăng nhập sẵn Douyin trên Edge/Chrome:</p>
+              {/* Hướng dẫn ngắn gọn */}
+              <div className="text-[11px] text-slate-300 space-y-1 bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+                <p className="font-semibold text-sky-300">Cách lấy file cookie từ trình duyệt (Chrome / Edge):</p>
                 <ol className="list-decimal list-inside space-y-1 text-slate-400">
-                  <li>Mở tab <span className="text-sky-300 font-mono">douyin.com</span> trên trình duyệt của bạn.</li>
-                  <li>Bấm phím <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-slate-200 font-mono text-[10px]">F12</kbd> (hoặc chuột phải chọn <i>Kiểm tra / Inspect</i>) &rarr; chọn tab <b>Console</b>.</li>
-                  <li>Gõ lệnh <code className="text-emerald-300 font-mono bg-slate-950 px-1 py-0.5 rounded">document.cookie</code> rồi ấn <b>Enter</b>.</li>
-                  <li>Copy toàn bộ chuỗi text kết quả và dán vào ô dưới:</li>
+                  <li>Mở tab <span className="text-white font-mono">douyin.com</span> (đã đăng nhập tài khoản của bạn).</li>
+                  <li>Cài tiện ích <b>Cookie-Editor</b> (hoặc <i>EditThisCookie / J2Team</i>).</li>
+                  <li>Bấm vào icon Cookie-Editor &rarr; bấm nút <b>Export</b> &rarr; chọn <b>Export as JSON</b>.</li>
                 </ol>
+              </div>
+
+              {/* VÙNG CHỌN / KÉO THẢ FILE JSON */}
+              <div>
+                <input
+                  type="file"
+                  ref={cookieFileInputRef}
+                  accept=".json,.txt"
+                  onChange={handleCookieFileSelect}
+                  className="hidden"
+                />
+                <div
+                  onClick={() => cookieFileInputRef.current?.click()}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                      handleCookieFileSelect({ target: { files: e.dataTransfer.files } });
+                    }
+                  }}
+                  className="border-2 border-dashed border-sky-500/40 hover:border-sky-400 bg-sky-500/5 hover:bg-sky-500/10 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition text-center group"
+                >
+                  {isUploadingCookieFile ? (
+                    <div className="flex items-center gap-2 text-sky-400 text-xs font-medium py-2">
+                      <RefreshCw className="w-5 h-5 animate-spin" />
+                      <span>Đang nạp và lưu file cookie...</span>
+                    </div>
+                  ) : (
+                    <>
+                      <Upload className="w-6 h-6 text-sky-400 group-hover:scale-110 transition-transform mb-1.5" />
+                      <span className="text-xs font-semibold text-slate-200">
+                        Bấm để chọn file Cookie JSON hoặc kéo thả file vào đây
+                      </span>
+                      <span className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                        (Hỗ trợ file .json xuất từ Cookie-Editor, ví dụ: www.douyin.com_*.json)
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-slate-800"></div>
+                <span className="flex-shrink mx-3 text-[10px] text-slate-500 uppercase font-semibold">Hoặc Dán Nội Dung JSON / Cookie</span>
+                <div className="flex-grow border-t border-slate-800"></div>
               </div>
 
               <textarea
                 rows={3}
                 value={douyinCookieInput}
                 onChange={(e) => setDouyinCookieInput(e.target.value)}
-                placeholder="Dán chuỗi cookie vào đây (ví dụ: sessionid=xxxx; sid_guard=yyyy; passport_csrf_token=zzzz...)"
+                placeholder="Dán nội dung JSON (ví dụ: [{'name': 'sessionid', ...}] hoặc {'cookies': [...]}) hoặc chuỗi cookie vào đây..."
                 className="w-full bg-slate-900 border border-slate-700 focus:border-sky-500 rounded-xl p-2.5 text-xs text-slate-200 placeholder-slate-500 outline-none font-mono resize-none"
               />
 

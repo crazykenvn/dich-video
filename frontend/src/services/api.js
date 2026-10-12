@@ -106,6 +106,19 @@ export const saveDouyinCookie = (cookie) => apiFetch('/api/videos/crawler/douyin
   method: 'POST',
   body: JSON.stringify({ cookie }),
 });
+export const uploadDouyinCookieFile = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch('/api/videos/crawler/douyin-cookie-file', {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Lỗi nạp file cookie' }));
+    throw new Error(err.detail || 'Lỗi nạp file cookie');
+  }
+  return await res.json();
+};
 export const uploadVideo = async (file) => {
   const formData = new FormData();
   formData.append('file', file);

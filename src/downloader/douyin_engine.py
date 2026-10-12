@@ -15,6 +15,7 @@ from ..config import PROJECT_ROOT
 COOKIES_DIR = PROJECT_ROOT / "cookies"
 COOKIES_DIR.mkdir(parents=True, exist_ok=True)
 DOUYIN_COOKIE_FILE = COOKIES_DIR / "douyin_cookies.txt"
+DOUYIN_COOKIE_JSON = COOKIES_DIR / "douyin_cookies.json"
 DOUYIN_PROFILE_DIR = COOKIES_DIR / "douyin_profile"
 DOUYIN_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -46,11 +47,23 @@ def save_netscape_cookies(cookies: list[dict[str, Any]], file_path: Path) -> Non
     file_path.write_text("".join(lines), encoding="utf-8")
 
 
-def load_cookie_header(file_path: Path) -> str:
-    """Đọc file cookie (dù là Netscape hay chuỗi raw) thành Header Cookie dạng name=val; name2=val2."""
-    if not file_path.exists() or file_path.stat().st_size == 0:
+def load_cookie_header(file_path: Path | None = None) -> str:
+    """Đọc file cookie (dù là JSON, Netscape hay chuỗi raw) thành Header Cookie dạng name=val; name2=val2."""
+    if file_path is None or file_path == DOUYIN_COOKIE_FILE:
+        if DOUYIN_COOKIE_JSON.exists() and DOUYIN_COOKIE_JSON.stat().st_size > 0:
+            try:
+                data = json.loads(DOUYIN_COOKIE_JSON.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    return "; ".join(f"{c['name']}={c.get('value', '')}" for c in data if c.get("name"))
+            except Exception:
+                pass
+        target = DOUYIN_COOKIE_FILE
+    else:
+        target = file_path
+
+    if not target.exists() or target.stat().st_size == 0:
         return ""
-    content = file_path.read_text(encoding="utf-8", errors="ignore").strip()
+    content = target.read_text(encoding="utf-8", errors="ignore").strip()
     if content.startswith("# Netscape") or "\t" in content:
         parts = []
         for line in content.splitlines():
@@ -77,9 +90,227 @@ DOUYIN_LOGIN_INDICATORS = [
 ]
 
 
+def save_imported_cookies(raw_content: str) -> dict[str, Any]:
+    """Nhận chuỗi cookie (JSON từ Cookie-Editor, EditThisCookie, J2Team, Netscape, hoặc header string)
+    và lưu đồng bộ vào douyin_cookies.json và douyin_cookies.txt."""
+    raw = raw_content.strip()
+    if not raw:
+        return {"success": False, "message": "Nội dung cookie trống!"}
+
+    parsed_cookies: list[dict[str, Any]] = []
+
+    # 1. Thử parse JSON
+    if (raw.startswith("{") and raw.endswith("}")) or (raw.startswith("[") and raw.endswith("]")):
+        try:
+            data = json.loads(raw)
+            raw_list = data.get("cookies", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            for c in raw_list:
+                name = str(c.get("name", "")).strip()
+                val = str(c.get("value", "")).strip()
+                if not name:
+                    continue
+                item: dict[str, Any] = {
+                    "name": name,
+                    "value": val,
+                    "domain": str(c.get("domain") or ".douyin.com"),
+                    "path": str(c.get("path") or "/"),
+                }
+                exp = c.get("expires") if c.get("expires") is not None else c.get("expirationDate")
+                if exp is not None:
+                    try:
+                        item["expires"] = float(exp)
+                    except (ValueError, TypeError):
+                        pass
+                if "httpOnly" in c:
+                    item["httpOnly"] = bool(c["httpOnly"])
+                if "secure" in c:
+                    item["secure"] = bool(c["secure"])
+                if "sameSite" in c:
+                    ss = str(c["sameSite"]).lower()
+                    if ss in ("strict", "lax", "none"):
+                        item["sameSite"] = ss.capitalize() if ss != "none" else "None"
+                    elif ss == "no_restriction":
+                        item["sameSite"] = "None"
+                parsed_cookies.append(item)
+        except Exception:
+            pass
+
+    # 2. Nếu chưa parse được, thử parse Netscape format
+    if not parsed_cookies and ("\t" in raw or raw.startswith("#")):
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            cols = line.split("\t")
+            if len(cols) >= 7:
+                item = {
+                    "name": cols[5],
+                    "value": cols[6],
+                    "domain": cols[0],
+                    "path": cols[2],
+                    "secure": cols[3].upper() == "TRUE",
+                }
+                try:
+                    exp_val = float(cols[4])
+                    if exp_val > 0:
+                        item["expires"] = exp_val
+                except Exception:
+                    pass
+                parsed_cookies.append(item)
+
+    # 3. Nếu vẫn chưa parse được, parse dạng raw header "key=value; key2=value2"
+    if not parsed_cookies:
+        for part in raw.split(";"):
+            part = part.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if k:
+                    parsed_cookies.append({
+                        "name": k,
+                        "value": v,
+                        "domain": ".douyin.com",
+                        "path": "/",
+                    })
+
+    if not parsed_cookies:
+        return {"success": False, "message": "Không nhận diện được định dạng cookie hợp lệ! Hãy kiểm tra lại file JSON hoặc chuỗi dán."}
+
+    # Lưu vào douyin_cookies.json
+    try:
+        DOUYIN_COOKIE_JSON.parent.mkdir(parents=True, exist_ok=True)
+        DOUYIN_COOKIE_JSON.write_text(json.dumps(parsed_cookies, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[CookieImport] Lỗi ghi douyin_cookies.json: {e}")
+
+    # Đồng thời lưu vào douyin_cookies.txt (Netscape)
+    try:
+        save_netscape_cookies(parsed_cookies, DOUYIN_COOKIE_FILE)
+    except Exception as e:
+        print(f"[CookieImport] Lỗi ghi douyin_cookies.txt: {e}")
+
+    # Kiểm tra trạng thái đăng nhập
+    names = {c.get("name", "") for c in parsed_cookies}
+    is_logged = any(k in names for k in DOUYIN_LOGIN_INDICATORS)
+    has_sessionid = any(k in names for k in ["sessionid", "sessionid_ss", "sid_guard"])
+
+    msg = f"Đã lưu thành công {len(parsed_cookies)} cookie."
+    if is_logged:
+        msg += " Phiên đăng nhập hợp lệ (có sessionid/token)!"
+    else:
+        msg += " Lưu ý: Chưa tìm thấy sessionid đăng nhập trong file cookie này."
+
+    return {
+        "success": True,
+        "count": len(parsed_cookies),
+        "logged_in": is_logged,
+        "has_sessionid": has_sessionid,
+        "message": msg,
+    }
+
+
+def get_playwright_cookies() -> list[dict[str, Any]]:
+    """Đọc danh sách cookie tương thích chuẩn với Playwright context.add_cookies().
+    Ưu tiên đọc file douyin_cookies.json, nếu không có thì đọc douyin_cookies.txt."""
+    if DOUYIN_COOKIE_JSON.exists() and DOUYIN_COOKIE_JSON.stat().st_size > 0:
+        try:
+            data = json.loads(DOUYIN_COOKIE_JSON.read_text(encoding="utf-8"))
+            if isinstance(data, list) and data:
+                valid_list = []
+                for c in data:
+                    if not isinstance(c, dict) or not c.get("name"):
+                        continue
+                    item: dict[str, Any] = {
+                        "name": str(c["name"]),
+                        "value": str(c.get("value", "")),
+                        "domain": str(c.get("domain") or ".douyin.com"),
+                        "path": str(c.get("path") or "/"),
+                    }
+                    if "expires" in c:
+                        try:
+                            item["expires"] = float(c["expires"])
+                        except Exception:
+                            pass
+                    if "httpOnly" in c:
+                        item["httpOnly"] = bool(c["httpOnly"])
+                    if "secure" in c:
+                        item["secure"] = bool(c["secure"])
+                    if "sameSite" in c:
+                        ss = str(c["sameSite"]).lower()
+                        if ss in ("strict", "lax", "none"):
+                            item["sameSite"] = ss.capitalize() if ss != "none" else "None"
+                        elif ss == "no_restriction":
+                            item["sameSite"] = "None"
+                    valid_list.append(item)
+                if valid_list:
+                    return valid_list
+        except Exception as e:
+            print(f"[get_playwright_cookies] Lỗi đọc douyin_cookies.json: {e}")
+
+    # Fallback đọc từ douyin_cookies.txt
+    if DOUYIN_COOKIE_FILE.exists() and DOUYIN_COOKIE_FILE.stat().st_size > 0:
+        try:
+            content = DOUYIN_COOKIE_FILE.read_text(encoding="utf-8", errors="ignore").strip()
+            if content.startswith("# Netscape") or "\t" in content:
+                valid_list = []
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    cols = line.split("\t")
+                    if len(cols) >= 7:
+                        item = {
+                            "name": cols[5],
+                            "value": cols[6],
+                            "domain": cols[0],
+                            "path": cols[2],
+                            "secure": cols[3].upper() == "TRUE",
+                        }
+                        try:
+                            exp_val = float(cols[4])
+                            if exp_val > 0:
+                                item["expires"] = exp_val
+                        except Exception:
+                            pass
+                        valid_list.append(item)
+                if valid_list:
+                    return valid_list
+            else:
+                # Raw header string
+                valid_list = []
+                for part in content.split(";"):
+                    if "=" in part:
+                        k, v = part.strip().split("=", 1)
+                        if k.strip():
+                            valid_list.append({
+                                "name": k.strip(),
+                                "value": v.strip(),
+                                "domain": ".douyin.com",
+                                "path": "/",
+                            })
+                if valid_list:
+                    return valid_list
+        except Exception as e:
+            print(f"[get_playwright_cookies] Lỗi đọc douyin_cookies.txt: {e}")
+
+    return []
+
+
 def is_douyin_logged_in() -> bool:
-    """Kiểm tra nhanh xem phiên duyệt Douyin trong cookies/douyin_cookies.txt hoặc cookies/douyin_profile đã đăng nhập hay chưa."""
-    # 1. Kiểm tra file cookies/douyin_cookies.txt
+    """Kiểm tra nhanh xem phiên duyệt Douyin trong cookies/douyin_cookies.json, douyin_cookies.txt hoặc cookies/douyin_profile đã đăng nhập hay chưa."""
+    # 1. Kiểm tra file cookies/douyin_cookies.json
+    if DOUYIN_COOKIE_JSON.exists() and DOUYIN_COOKIE_JSON.stat().st_size > 0:
+        try:
+            data = json.loads(DOUYIN_COOKIE_JSON.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                names = {c.get("name", "") for c in data if isinstance(c, dict)}
+                if any(k in names for k in DOUYIN_LOGIN_INDICATORS):
+                    return True
+        except Exception:
+            pass
+
+    # 2. Kiểm tra file cookies/douyin_cookies.txt
     if DOUYIN_COOKIE_FILE.exists() and DOUYIN_COOKIE_FILE.stat().st_size > 0:
         try:
             content = DOUYIN_COOKIE_FILE.read_text(encoding="utf-8", errors="ignore")
@@ -88,7 +319,7 @@ def is_douyin_logged_in() -> bool:
         except Exception:
             pass
 
-    # 2. Kiểm tra SQLite cookie trong cookies/douyin_profile
+    # 3. Kiểm tra SQLite cookie trong cookies/douyin_profile
     import sqlite3, shutil, tempfile
     profile_dir = COOKIES_DIR / "douyin_profile"
     cookie_db = profile_dir / "Default" / "Network" / "Cookies"
@@ -276,25 +507,13 @@ class DouyinDownloader:
 
                 context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
                 
-                # Nạp thêm cookie từ file cookies/douyin_cookies.txt nếu có
+                # Nạp cookie vào context trình duyệt (từ douyin_cookies.json hoặc douyin_cookies.txt)
                 try:
-                    cookie_str = load_cookie_header(DOUYIN_COOKIE_FILE)
-                    if cookie_str:
-                        cookies_to_add = []
-                        for part in cookie_str.split(";"):
-                            if "=" in part:
-                                k, v = part.strip().split("=", 1)
-                                if k.strip():
-                                    cookies_to_add.append({
-                                        "name": k.strip(),
-                                        "value": v.strip(),
-                                        "domain": ".douyin.com",
-                                        "path": "/",
-                                    })
-                        if cookies_to_add:
-                            context.add_cookies(cookies_to_add)
-                except Exception:
-                    pass
+                    pw_cookies = get_playwright_cookies()
+                    if pw_cookies:
+                        context.add_cookies(pw_cookies)
+                except Exception as e:
+                    print(f"[DouyinBrowser] Lỗi nạp cookie: {e}")
 
                 page = context.pages[0] if context.pages else context.new_page()
                 page.on("response", handle_response)
@@ -374,6 +593,7 @@ class DouyinDownloader:
                     cookies = context.cookies()
                     if cookies and any(c.get("name") in ["sessionid", "sid_guard", "sessionid_ss", "uid_tt"] for c in cookies):
                         save_netscape_cookies(cookies, DOUYIN_COOKIE_FILE)
+                        DOUYIN_COOKIE_JSON.write_text(json.dumps(cookies, ensure_ascii=False, indent=2), encoding="utf-8")
                 except Exception:
                     pass
 
@@ -587,25 +807,13 @@ class DouyinDownloader:
 
                 context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
 
-                # Nạp thêm cookie từ file cookies/douyin_cookies.txt nếu có
+                # Nạp cookie vào context trình duyệt (từ douyin_cookies.json hoặc douyin_cookies.txt)
                 try:
-                    cookie_str = load_cookie_header(DOUYIN_COOKIE_FILE)
-                    if cookie_str:
-                        cookies_to_add = []
-                        for part in cookie_str.split(";"):
-                            if "=" in part:
-                                k, v = part.strip().split("=", 1)
-                                if k.strip():
-                                    cookies_to_add.append({
-                                        "name": k.strip(),
-                                        "value": v.strip(),
-                                        "domain": ".douyin.com",
-                                        "path": "/",
-                                    })
-                        if cookies_to_add:
-                            context.add_cookies(cookies_to_add)
-                except Exception:
-                    pass
+                    pw_cookies = get_playwright_cookies()
+                    if pw_cookies:
+                        context.add_cookies(pw_cookies)
+                except Exception as e:
+                    print(f"[DouyinBrowser] Lỗi nạp cookie trong download_single_video: {e}")
 
                 page = context.pages[0] if context.pages else context.new_page()
                 captured_play_url = None

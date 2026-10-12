@@ -32,8 +32,10 @@ from ...downloader.douyin_engine import (
     DouyinDownloader,
     is_douyin_logged_in,
     DOUYIN_COOKIE_FILE,
+    DOUYIN_COOKIE_JSON,
     DOUYIN_PROFILE_DIR,
     DOUYIN_LOGIN_INDICATORS,
+    save_imported_cookies,
     save_netscape_cookies,
 )
 from ...downloader.ytdlp_engine import YtDlpEngine
@@ -893,23 +895,36 @@ def reset_crawler_scan(req: ResetScanRequest) -> dict[str, Any]:
 
 @router.post("/crawler/douyin-cookie")
 def save_douyin_cookie(req: SaveDouyinCookieRequest) -> dict[str, Any]:
-    """Nhận chuỗi cookie từ người dùng (ví dụ copy từ tab Edge đã đăng nhập sẵn) và lưu vào hệ thống."""
+    """Nhận chuỗi cookie (JSON từ extension Cookie-Editor, Netscape, hoặc header string) và lưu vào hệ thống."""
     raw = req.cookie.strip()
     if not raw:
-        raise HTTPException(status_code=400, detail="Vui lòng cung cấp chuỗi cookie hợp lệ!")
+        raise HTTPException(status_code=400, detail="Vui lòng cung cấp chuỗi cookie hoặc JSON hợp lệ!")
 
-    # Lưu vào cookies/douyin_cookies.txt
-    DOUYIN_COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DOUYIN_COOKIE_FILE.write_text(raw, encoding="utf-8")
+    res = save_imported_cookies(raw)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("message", "Không thể xử lý cookie"))
 
-    # Kiểm tra xem có chứa cookie đăng nhập hay không (bao gồm cả các token trong document.cookie)
-    is_logged = any(k in raw for k in DOUYIN_LOGIN_INDICATORS)
+    return res
 
-    return {
-        "success": True,
-        "logged_in": is_logged,
-        "message": "✓ Đã lưu cookie Douyin thành công! Hệ thống đã sẵn sàng cào toàn bộ video.",
-    }
+
+@router.post("/crawler/douyin-cookie-file")
+async def save_douyin_cookie_file(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Nhận file cookie (.json hoặc .txt) được export từ trình duyệt (Cookie-Editor, J2Team...) và lưu vào hệ thống."""
+    try:
+        content_bytes = await file.read()
+        raw_text = content_bytes.decode("utf-8", errors="ignore").strip()
+        if not raw_text:
+            raise HTTPException(status_code=400, detail="File cookie tải lên bị trống!")
+
+        res = save_imported_cookies(raw_text)
+        if not res.get("success"):
+            raise HTTPException(status_code=400, detail=res.get("message", "Không thể xử lý file cookie"))
+
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi đọc file cookie: {e}")
 
 
 @router.post("/crawler/douyin-login")
