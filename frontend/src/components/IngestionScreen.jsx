@@ -93,13 +93,23 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
 
     if (srcData) {
       setSources(srcData);
-      if (srcData.download_subfolders?.length > 0) {
-        const first = srcData.download_subfolders[0];
+      if (accData && accData.length > 0) {
+        const first = accData[0];
+        const firstFolder = `${first.platform || 'douyin'}_${first.account_id}`;
         if (activeSourceId === 'all') {
           setActiveSourceType('subfolder');
+          setActiveSourceId(firstFolder);
+          setTargetAccount(firstFolder);
+          loadVideos('subfolder', firstFolder);
+        } else {
+          loadVideos(activeSourceType, activeSourceId);
+        }
+      } else if (srcData.local_folders?.length > 0) {
+        const first = srcData.local_folders[0];
+        if (activeSourceId === 'all') {
+          setActiveSourceType('local');
           setActiveSourceId(first.id);
-          setTargetAccount(first.folder_name);
-          loadVideos(first.type === 'local_disk' ? 'local' : 'subfolder', first.id);
+          loadVideos('local', first.id);
         } else {
           loadVideos(activeSourceType, activeSourceId);
         }
@@ -1165,102 +1175,56 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
               )}
             </div>
 
-            {/* 3.2. Thư Mục Subfolder Tải Về (Downloads) */}
-            <div className="space-y-1.5 pt-2 border-t border-slate-800">
-              <div className="text-[11px] text-slate-400 uppercase font-bold tracking-wider px-1">
-                Thư Mục Tải Về (Downloads):
-              </div>
-              {sources.download_subfolders?.map(sub => {
-                const isAct = activeSourceType === 'subfolder' && activeSourceId === sub.id;
-                const isGeneral = sub.id === 'general_inbox';
-                return (
-                  <div
-                    key={sub.id}
-                    onClick={() => handleFilterFolder('subfolder', sub.id)}
-                    className={`p-2 rounded-xl cursor-pointer transition flex items-center justify-between group ${
-                      isAct ? 'bg-sky-500/10 border-2 border-sky-400' : 'bg-slate-950/80 border border-slate-800 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Folder className="w-4 h-4 text-sky-400 shrink-0" />
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold text-white truncate">{sub.name}</p>
-                        <p className="text-[10px] text-slate-400 font-mono">{sub.video_count} video</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); api.openFolder(sub.path); }}
-                        className="text-[10px] text-slate-400 hover:text-white px-1.5 py-0.5 bg-slate-800 rounded border border-slate-700 shrink-0"
-                        title="Mở thư mục trong Windows Explorer"
-                      >
-                        📂 Mở
-                      </button>
-                      {!isGeneral && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleRemoveFolder(sub.id, 'subfolder', sub.name); }}
-                          className="text-[10px] text-slate-500 hover:text-rose-400 hover:bg-rose-500/20 p-1 rounded border border-slate-800 shrink-0 transition"
-                          title="Xóa thư mục tải về này"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
+            {/* 3.2. Thư Mục Máy Tính (Chỉ hiển thị khi người dùng đã thêm thư mục trên máy) */}
+            {sources.local_folders?.length > 0 && (
+              <div className="space-y-1.5 pt-2 border-t border-slate-800">
+                <div className="flex items-center justify-between px-1">
+                  <div className="text-[11px] text-amber-400 uppercase font-bold tracking-wider flex items-center gap-1.5">
+                    <Laptop className="w-3.5 h-3.5" /> Thư Mục Máy Tính ({sources.local_folders.length}):
                   </div>
-                );
-              })}
-            </div>
-
-            {/* 3.3. Thư Mục Có Sẵn Trên Máy Tính (Local Folders) */}
-            <div className="space-y-1.5 pt-2 border-t border-slate-800">
-              <div className="flex items-center justify-between px-1">
-                <div className="text-[11px] text-amber-400 uppercase font-bold tracking-wider">
-                  Thư Mục Máy Tính ({sources.local_folders?.length || 0}):
                 </div>
-              </div>
-              {sources.local_folders?.length > 0 ? (
-                sources.local_folders.map(loc => {
-                  const isAct = activeSourceType === 'local' && activeSourceId === loc.id;
-                  return (
-                    <div
-                      key={loc.id}
-                      onClick={() => handleFilterFolder('local', loc.id)}
-                      className={`p-2 rounded-xl cursor-pointer transition flex items-center justify-between group ${
-                        isAct ? 'bg-amber-500/10 border-2 border-amber-400' : 'bg-slate-950/80 border border-amber-500/30 hover:border-amber-400'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Laptop className="w-4 h-4 text-amber-400 shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold text-amber-200 truncate">{loc.name}</p>
-                          <p className="text-[10px] text-slate-400 font-mono truncate">{loc.video_count} video • {loc.path}</p>
+                <div className="space-y-1.5 max-h-[220px] overflow-y-auto pr-1">
+                  {sources.local_folders.map(loc => {
+                    const isAct = activeSourceType === 'local' && activeSourceId === loc.id;
+                    return (
+                      <div
+                        key={loc.id}
+                        onClick={() => handleFilterFolder('local', loc.id)}
+                        className={`p-2 rounded-xl cursor-pointer transition flex items-center justify-between group ${
+                          isAct ? 'bg-amber-500/10 border-2 border-amber-400' : 'bg-slate-950/80 border border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Laptop className="w-4 h-4 text-amber-400 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-amber-200 truncate">{loc.name}</p>
+                            <p className="text-[10px] text-slate-400 font-mono truncate">{loc.video_count} video • {loc.path}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); api.openFolder(loc.path); }}
+                            className="text-[10px] text-slate-400 hover:text-white px-1.5 py-0.5 bg-slate-800 rounded border border-slate-700 shrink-0"
+                            title="Mở thư mục trong Windows Explorer"
+                          >
+                            📂 Mở
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); handleRemoveFolder(loc.path, 'local', loc.name); }}
+                            className="text-[10px] text-rose-400 hover:text-white hover:bg-rose-500/40 p-1 bg-slate-800 rounded border border-rose-500/30 shrink-0 transition"
+                            title="Gỡ bỏ thư mục này khỏi danh sách Studio"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); api.openFolder(loc.path); }}
-                          className="text-[10px] text-slate-400 hover:text-white px-1.5 py-0.5 bg-slate-800 rounded border border-slate-700 shrink-0"
-                          title="Mở thư mục trong Windows Explorer"
-                        >
-                          📂 Mở
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleRemoveFolder(loc.path, 'local', loc.name); }}
-                          className="text-[10px] text-rose-400 hover:text-white hover:bg-rose-500/40 p-1 bg-slate-800 rounded border border-rose-500/30 shrink-0 transition"
-                          title="Gỡ bỏ thư mục này khỏi danh sách Studio"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <p className="text-xs text-slate-500 px-2 py-1 italic">
-                  Chưa có thư mục máy nào được thêm
-                </p>
-              )}
-            </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1.5 mt-3 pt-2 border-t border-slate-800">
@@ -1334,7 +1298,10 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 flex-wrap gap-2">
             <div>
               <span className="font-bold text-xs text-white uppercase tracking-wider">
-                {activeSourceType === 'local' ? activeSourceId : `downloads/${activeSourceId}/`} ({filteredVideos.length} video)
+                {activeSourceId === 'all'
+                  ? 'Tất cả video'
+                  : (accounts.find(a => activeSourceId.includes(a.account_id))?.account_name
+                      || (activeSourceType === 'local' ? activeSourceId : `downloads/${activeSourceId}/`))} ({filteredVideos.length} video)
               </span>
             </div>
 
