@@ -32,6 +32,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
     minimized: false,
   });
   const [downloadingVideoIds, setDownloadingVideoIds] = useState(new Set());
+  const [selectedAccountIds, setSelectedAccountIds] = useState(new Set());
 
   // Compact modal states
   const [showStorageModal, setShowStorageModal] = useState(false);
@@ -268,6 +269,78 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
       await loadSourcesData();
     } else {
       showToast(`❌ Không thể xóa kênh: ${res?.detail || 'Lỗi server'}`, 'error');
+    }
+  };
+
+  // 9b. Tích chọn/bỏ chọn 1 tài khoản
+  const handleToggleSelectAccount = (accountId) => {
+    setSelectedAccountIds(prev => {
+      const next = new Set(prev);
+      if (next.has(accountId)) next.delete(accountId);
+      else next.add(accountId);
+      return next;
+    });
+  };
+
+  // 9c. Chọn tất cả / Bỏ chọn tất cả tài khoản
+  const handleSelectAllAccounts = () => {
+    if (selectedAccountIds.size === accounts.length && accounts.length > 0) {
+      setSelectedAccountIds(new Set());
+    } else {
+      setSelectedAccountIds(new Set(accounts.map(a => a.account_id)));
+    }
+  };
+
+  // 9d. Xóa hàng loạt các kênh đã chọn
+  const handleBulkDeleteAccounts = async () => {
+    if (selectedAccountIds.size === 0) return;
+    const count = selectedAccountIds.size;
+    const confirmMsg = `Bạn có chắc muốn xóa ${count} kênh đã chọn khỏi danh sách theo dõi của Studio?\n\n(Lưu ý: Các video và file đã tải về máy vẫn an toàn, không bị xóa)`;
+    if (!window.confirm(confirmMsg)) return;
+
+    showToast(`Đang xóa ${count} kênh...`, 'info');
+    let deletedCount = 0;
+    for (const accId of selectedAccountIds) {
+      try {
+        const res = await api.deleteCrawlerAccount(accId);
+        if (res && res.success) deletedCount++;
+      } catch (err) {
+        console.warn(`Lỗi xóa kênh ${accId}:`, err);
+      }
+    }
+    showToast(`✓ Đã xóa thành công ${deletedCount}/${count} kênh!`, 'success');
+    setSelectedAccountIds(new Set());
+    await loadSourcesData();
+    handleFilterFolder('all', 'all');
+  };
+
+  // 9e. Quét hàng loạt (Quét mới hoặc Quét lại toàn bộ)
+  const handleBulkScanAccounts = async (forceFullScan = false) => {
+    if (selectedAccountIds.size === 0) {
+      if (forceFullScan) {
+        if (!window.confirm("Bạn có chắc muốn Reset mốc quét và quét lại TOÀN BỘ video từ đầu cho tất cả các kênh đang bật?")) return;
+      }
+      await handleScanAccounts(null, forceFullScan);
+      return;
+    }
+
+    const selectedList = Array.from(selectedAccountIds);
+    if (selectedList.length === 1) {
+      if (forceFullScan) {
+        const acc = accounts.find(a => a.account_id === selectedList[0]);
+        const confirmMsg = `Bạn có chắc muốn Reset mốc quét cho kênh "${acc?.account_name || selectedList[0]}"?\n\nHệ thống sẽ quét lại toàn bộ video từ trước đến nay của kênh này.`;
+        if (!window.confirm(confirmMsg)) return;
+      }
+      await handleScanAccounts(selectedList[0], forceFullScan);
+    } else {
+      if (forceFullScan) {
+        const confirmMsg = `Bạn có chắc muốn Reset mốc quét và quét lại TOÀN BỘ video từ trước đến nay cho ${selectedList.length} kênh đã chọn?`;
+        if (!window.confirm(confirmMsg)) return;
+      }
+      for (let i = 0; i < selectedList.length; i++) {
+        const accId = selectedList[i];
+        await handleScanAccounts(accId, forceFullScan);
+      }
     }
   };
 
@@ -881,74 +954,129 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
 
           <div className="flex-1 overflow-y-auto space-y-3 mt-2.5 pr-1">
             {/* 3.1. Kênh Cào Video Tự Động (Crawler Accounts) */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between px-1">
-                <div className="text-[11px] text-sky-400 uppercase font-bold tracking-wider flex items-center gap-1">
-                  <Rss className="w-3 h-3" /> Kênh Crawl ({accounts.length})
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1 pb-1">
+                <div className="text-[11px] text-sky-400 uppercase font-bold tracking-wider flex items-center gap-1.5">
+                  <Rss className="w-3.5 h-3.5" /> Kênh Crawl ({accounts.length})
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5">
+                  {/* Douyin Login status */}
                   <button
+                    type="button"
+                    onClick={handleDouyinLogin}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95 ${
+                      isDouyinLoggedIn
+                        ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30'
+                    }`}
+                    title={
+                      isDouyinLoggedIn
+                        ? 'Douyin đã đăng nhập thành công. Bấm nếu muốn kiểm tra hoặc nhập cookie mới'
+                        : 'BẮT BUỘC: Đăng nhập Douyin một lần duy nhất để cào toàn bộ video!'
+                    }
+                  >
+                    {isDouyinLoggedIn ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-400" /> Đã Login
+                      </>
+                    ) : (
+                      <>
+                        <Key className="w-3 h-3 text-rose-400" /> Chưa Login
+                      </>
+                    )}
+                  </button>
+
+                  {/* Thêm Kênh */}
+                  <button
+                    type="button"
                     onClick={() => setShowAddModal(true)}
                     className="px-2 py-0.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95"
                     title="Thêm tài khoản Douyin/TikTok/Bilibili mới để theo dõi"
                   >
                     <Plus className="w-3 h-3" /> Thêm Kênh
                   </button>
-                  <button
-                    onClick={() => handleScanAccounts(null, false)}
-                    disabled={isScanning || accounts.length === 0}
-                    className="px-2 py-0.5 bg-emerald-500/20 hover:bg-emerald-500/30 disabled:bg-slate-800 text-emerald-300 disabled:text-slate-500 border border-emerald-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95"
-                    title="Quét video mới cho tất cả kênh đang bật"
-                  >
-                    {isScanning && !scanState.accountId && !scanState.forceFullScan ? (
-                      <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
-                    ) : (
-                      <Play className="w-3 h-3" />
-                    )}
-                    {isScanning && !scanState.accountId && !scanState.forceFullScan ? 'Đang Quét...' : 'Quét Mới'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (window.confirm("Bạn có chắc muốn Reset mốc quét và quét lại TOÀN BỘ video từ đầu cho tất cả các kênh đang bật?")) {
-                        handleScanAccounts(null, true);
-                      }
-                    }}
-                    disabled={isScanning || accounts.length === 0}
-                    className="px-2 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 disabled:bg-slate-800 text-amber-300 disabled:text-slate-500 border border-amber-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95"
-                    title="Reset mốc quét và quét lại TOÀN BỘ video từ trước đến nay của tất cả kênh"
-                  >
-                    {isScanning && !scanState.accountId && scanState.forceFullScan ? (
-                      <RefreshCw className="w-3 h-3 animate-spin text-amber-400" />
-                    ) : (
-                      <RotateCcw className="w-3 h-3" />
-                    )}
-                    {isScanning && !scanState.accountId && scanState.forceFullScan ? 'Đang Quét Lại...' : 'Quét Lại'}
-                  </button>
-                  <button
-                    onClick={handleDouyinLogin}
-                    className={`px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95 ${
-                      isDouyinLoggedIn
-                        ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30'
-                        : 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30'
-                    }`}
-                    title={
-                      isDouyinLoggedIn
-                        ? 'Douyin đã đăng nhập thành công. Bấm nếu muốn đăng nhập lại tài khoản khác.'
-                        : 'BẮT BUỘC: Quét mã QR đăng nhập Douyin một lần duy nhất để cào toàn bộ 111+ video của kênh!'
-                    }
-                  >
-                    {isDouyinLoggedIn ? (
-                      <>
-                        <Check className="w-3 h-3 text-emerald-400" /> Douyin: Đã Login
-                      </>
-                    ) : (
-                      <>
-                        <Key className="w-3 h-3 text-rose-400" /> Đăng Nhập Douyin
-                      </>
-                    )}
-                  </button>
                 </div>
               </div>
+
+              {/* Tầng 2: Contextual Bulk Action Bar */}
+              {accounts.length > 0 && (
+                <div className={`p-1.5 rounded-xl border flex items-center justify-between gap-1.5 transition ${
+                  selectedAccountIds.size > 0 
+                    ? 'bg-sky-950/70 border-sky-500/50 shadow-sm' 
+                    : 'bg-slate-950/60 border-slate-800'
+                }`}>
+                  {/* Select All & Counter */}
+                  <div className="flex items-center gap-1.5 shrink-0 pl-0.5">
+                    <button
+                      type="button"
+                      onClick={handleSelectAllAccounts}
+                      className="text-slate-400 hover:text-white transition p-0.5 flex items-center gap-1"
+                      title={selectedAccountIds.size === accounts.length && accounts.length > 0 ? "Bỏ chọn tất cả" : "Chọn tất cả kênh"}
+                    >
+                      {selectedAccountIds.size === accounts.length && accounts.length > 0 ? (
+                        <CheckSquare className="w-3.5 h-3.5 text-sky-400" />
+                      ) : (
+                        <Square className="w-3.5 h-3.5 text-slate-500" />
+                      )}
+                    </button>
+                    <span className="text-[10px] font-mono text-slate-300">
+                      {selectedAccountIds.size > 0 ? (
+                        <span className="font-bold text-sky-400">{selectedAccountIds.size}/{accounts.length}</span>
+                      ) : (
+                        <span className="text-slate-500">Tất cả ({accounts.length})</span>
+                      )}
+                    </span>
+                  </div>
+
+                  {/* Action buttons */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {/* Quét mới */}
+                    <button
+                      type="button"
+                      onClick={() => handleBulkScanAccounts(false)}
+                      disabled={isScanning || accounts.length === 0}
+                      className="px-2 py-0.5 bg-emerald-500/20 hover:bg-emerald-500/30 disabled:bg-slate-800 text-emerald-300 disabled:text-slate-500 border border-emerald-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95"
+                      title={selectedAccountIds.size > 0 ? `Quét video mới cho ${selectedAccountIds.size} kênh đã chọn` : "Quét video mới cho tất cả các kênh đang bật"}
+                    >
+                      {isScanning && !scanState.forceFullScan ? (
+                        <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
+                      ) : (
+                        <Play className="w-3 h-3" />
+                      )}
+                      {selectedAccountIds.size > 0 ? `Quét (${selectedAccountIds.size})` : 'Quét Mới'}
+                    </button>
+
+                    {/* Quét lại (Reset full) */}
+                    <button
+                      type="button"
+                      onClick={() => handleBulkScanAccounts(true)}
+                      disabled={isScanning || accounts.length === 0}
+                      className="px-2 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 disabled:bg-slate-800 text-amber-300 disabled:text-slate-500 border border-amber-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95"
+                      title={selectedAccountIds.size > 0 ? `Reset mốc & Quét lại toàn bộ cho ${selectedAccountIds.size} kênh đã chọn` : "Reset mốc quét và quét lại TOÀN BỘ video từ trước đến nay của tất cả kênh"}
+                    >
+                      {isScanning && scanState.forceFullScan ? (
+                        <RefreshCw className="w-3 h-3 animate-spin text-amber-400" />
+                      ) : (
+                        <RotateCcw className="w-3 h-3" />
+                      )}
+                      {selectedAccountIds.size > 0 ? `Quét Lại (${selectedAccountIds.size})` : 'Quét Lại'}
+                    </button>
+
+                    {/* Xóa các kênh đã chọn */}
+                    {selectedAccountIds.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleBulkDeleteAccounts}
+                        disabled={isScanning}
+                        className="px-2 py-0.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95 animate-in fade-in"
+                        title={`Xóa ${selectedAccountIds.size} kênh đã chọn khỏi danh sách theo dõi`}
+                      >
+                        <Trash2 className="w-3 h-3" /> Xóa ({selectedAccountIds.size})
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {accounts.length === 0 ? (
                 <div className="p-3 bg-slate-950/60 border border-dashed border-slate-800 rounded-xl text-center space-y-1.5">
@@ -961,17 +1089,19 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                   </button>
                 </div>
               ) : (
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
                   {accounts.map(acc => {
                     const isAct = Boolean(acc.is_active);
                     const isSelected = activeSourceType === 'subfolder' && activeSourceId.includes(acc.account_id);
+                    const isChecked = selectedAccountIds.has(acc.account_id);
                     const isCurrentScanning = scanState.active && scanState.accountId === acc.account_id;
+                    const matchingSub = sources.download_subfolders?.find(s => s.id.includes(acc.account_id));
+                    const vidCount = matchingSub?.video_count ?? 0;
+
                     return (
                       <div
                         key={acc.id || acc.account_id}
                         onClick={() => {
-                          // Tìm subfolder tương ứng
-                          const matchingSub = sources.download_subfolders?.find(s => s.id.includes(acc.account_id));
                           if (matchingSub) {
                             handleFilterFolder('subfolder', matchingSub.id);
                           } else {
@@ -979,11 +1109,28 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                           }
                         }}
                         className={`p-2 rounded-xl cursor-pointer transition flex items-center justify-between group ${
-                          isSelected ? 'bg-sky-500/15 border-2 border-sky-400' : 'bg-slate-950/80 border border-slate-800 hover:border-slate-700'
+                          isSelected ? 'bg-sky-500/15 border-2 border-sky-400 shadow-sm' : 'bg-slate-950/80 border border-slate-800 hover:border-slate-700'
                         }`}
                       >
                         <div className="flex items-center gap-2 min-w-0">
+                          {/* Checkbox chọn */}
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleSelectAccount(acc.account_id);
+                            }}
+                            className="p-0.5 cursor-pointer text-slate-400 hover:text-white transition shrink-0"
+                            title={isChecked ? "Bỏ chọn kênh này" : "Chọn kênh này"}
+                          >
+                            {isChecked ? (
+                              <CheckSquare className="w-4 h-4 text-sky-400" />
+                            ) : (
+                              <Square className="w-4 h-4 text-slate-600 group-hover:text-slate-400" />
+                            )}
+                          </div>
+
                           {getPlatformBadge(acc.platform)}
+
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 min-w-0">
                               <p className="text-xs font-bold text-white truncate">{acc.account_name}</p>
@@ -993,58 +1140,42 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                                 </span>
                               )}
                             </div>
-                            <p className="text-[10px] text-slate-400 font-mono truncate">
-                              ID: {acc.account_id} • {isAct ? '🟢 Đang bật' : '⏸️ Tạm dừng'}
-                            </p>
+                            <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono truncate mt-0.5">
+                              <span className="truncate">ID: {acc.account_id}</span>
+                              <span>•</span>
+                              <span className="text-slate-300 font-semibold shrink-0">{vidCount} video</span>
+                            </div>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1 shrink-0">
-                          {/* Switch Bật/Tắt */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {/* Trạng thái Bật/Tắt mini (click nhanh) */}
                           <button
+                            type="button"
                             onClick={(e) => { e.stopPropagation(); handleToggleAccount(acc); }}
-                            className={`p-1 rounded transition ${isAct ? 'text-emerald-400 hover:bg-emerald-500/20' : 'text-slate-500 hover:bg-slate-800'}`}
-                            title={isAct ? 'Bấm để tạm dừng quét kênh này' : 'Bấm để kích hoạt quét'}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 transition ${
+                              isAct 
+                                ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20' 
+                                : 'bg-slate-800 text-slate-500 hover:bg-slate-700 border border-slate-700/50'
+                            }`}
+                            title={isAct ? 'Đang bật tự động quét (Bấm để tạm dừng)' : 'Đang tạm dừng quét (Bấm để bật)'}
                           >
-                            {isAct ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
+                            <span className={`w-1.5 h-1.5 rounded-full ${isAct ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                            {isAct ? 'Bật' : 'Tắt'}
                           </button>
 
-                          {/* Quét video mới */}
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleScanAccounts(acc.account_id, false); }}
-                            disabled={isScanning}
-                            className="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-sky-500/20 transition disabled:opacity-50"
-                            title="Quét video mới nhất từ mốc trước"
-                          >
-                            {isCurrentScanning && !scanState.forceFullScan ? (
-                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-400" />
-                            ) : (
-                              <Play className="w-3 h-3" />
-                            )}
-                          </button>
-
-                          {/* Reset & Quét lại toàn bộ video kênh này */}
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleResetAccountScan(acc); }}
-                            disabled={isScanning}
-                            className="p-1 rounded text-slate-400 hover:text-amber-300 hover:bg-amber-500/20 transition disabled:opacity-50"
-                            title="Reset mốc & Quét lại toàn bộ video từ trước đến nay của kênh này"
-                          >
-                            {isCurrentScanning && scanState.forceFullScan ? (
-                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                            ) : (
-                              <RotateCcw className="w-3 h-3" />
-                            )}
-                          </button>
-
-                          {/* Xóa kênh */}
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDeleteAccount(acc); }}
-                            className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/20 transition"
-                            title="Xóa kênh khỏi danh sách theo dõi"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                          {/* Quick 1-click Scan on Hover */}
+                          <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); handleScanAccounts(acc.account_id, false); }}
+                              disabled={isScanning}
+                              className="p-1 rounded bg-sky-500/10 hover:bg-sky-500/25 text-sky-400 hover:text-sky-300 transition"
+                              title="Quét video mới cho kênh này ngay (1 click)"
+                            >
+                              <Play className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
