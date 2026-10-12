@@ -278,8 +278,20 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
         if (res.warning) {
           showToast(`⚠️ ${res.warning}`, 'warning');
         }
-        await loadSourcesData();
-        await loadVideos(activeSourceType, activeSourceId);
+        const srcData = await api.getSources();
+        const accData = await api.getCrawlerAccounts();
+        if (accData && Array.isArray(accData)) setAccounts(accData);
+        if (srcData) setSources(srcData);
+
+        if (accountId) {
+          const matchingSub = srcData?.download_subfolders?.find(s => s.id.includes(accountId));
+          const targetSubId = matchingSub ? matchingSub.id : `douyin_${accountId}`;
+          setActiveSourceType('subfolder');
+          setActiveSourceId(targetSubId);
+          await loadVideos('subfolder', targetSubId);
+        } else {
+          await loadVideos(activeSourceType, activeSourceId);
+        }
       } else {
         showToast(`❌ Quét thất bại: ${res?.detail || 'Lỗi kết nối mạng/WAF'}`, 'error');
       }
@@ -902,7 +914,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                           if (matchingSub) {
                             handleFilterFolder('subfolder', matchingSub.id);
                           } else {
-                            handleFilterFolder('all', 'all');
+                            handleFilterFolder('subfolder', `${acc.platform || 'douyin'}_${acc.account_id}`);
                           }
                         }}
                         className={`p-2 rounded-xl cursor-pointer transition flex items-center justify-between group ${

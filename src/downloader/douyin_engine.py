@@ -487,6 +487,7 @@ class DouyinDownloader:
                     "--no-sandbox",
                     "--disable-infobars",
                 ]
+                browser = None
                 for channel in ["msedge", "chrome", None]:
                     try:
                         context = p.chromium.launch_persistent_context(
@@ -501,6 +502,24 @@ class DouyinDownloader:
                         break
                     except Exception:
                         continue
+
+                if not context:
+                    # Fallback sang ephemeral context nếu profile directory bị lock bởi tiến trình khác
+                    for channel in ["msedge", "chrome", None]:
+                        try:
+                            browser = p.chromium.launch(
+                                channel=channel,
+                                headless=True,
+                                args=launch_args,
+                            )
+                            context = browser.new_context(
+                                user_agent=DOUYIN_PC_UA,
+                                viewport={"width": 1280, "height": 800},
+                                locale="zh-CN",
+                            )
+                            break
+                        except Exception:
+                            continue
 
                 if not context:
                     return []
@@ -597,7 +616,15 @@ class DouyinDownloader:
                 except Exception:
                     pass
 
-                context.close()
+                try:
+                    context.close()
+                except Exception:
+                    pass
+                if browser:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"[DouyinDownloader] Lỗi Playwright: {e}")
 
