@@ -426,6 +426,10 @@ def get_video_list(
                     pub_at = None
                     is_pin = 0
 
+                    proc_status = "inbox"
+                    proc_path = None
+                    is_uploaded = False
+
                     if matched_db:
                         v_id = matched_db["id"]
                         seen_db_ids.add(v_id)
@@ -437,12 +441,47 @@ def get_video_list(
                         duration_s = format_duration(matched_db.get("duration", 0))
                         pub_at = matched_db.get("published_at")
                         is_pin = int(matched_db.get("is_pinned") or 0)
+                        proc_status = matched_db.get("processed_status") or "inbox"
+                        proc_path = matched_db.get("processed_video_path")
+                        is_uploaded = bool(matched_db.get("is_uploaded"))
                     else:
                         try:
                             from datetime import datetime, timezone
                             pub_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
                         except Exception:
                             pass
+
+                    # Kiểm tra file thành phẩm xuất trong ready_to_upload
+                    ready_sub_dir = (OUTPUT_DIR / "ready_to_upload" / sub_name).resolve()
+                    exported_file = None
+                    if proc_path and Path(proc_path).exists() and Path(proc_path).is_file():
+                        exported_file = str(Path(proc_path).resolve())
+                    elif ready_sub_dir.exists():
+                        for f in ready_sub_dir.glob(f"{item.stem}*.*"):
+                            if f.is_file() and f.suffix.lower() in SUPPORTED_VIDEO_EXT:
+                                exported_file = str(f.resolve())
+                                break
+
+                    # Kiểm tra file phụ đề & lồng tiếng đã tạo
+                    sub_dir = (OUTPUT_DIR / "subtitles").resolve()
+                    has_sub_file = (
+                        (item.parent / f"{item.stem}_meta.json").exists()
+                        or (item.parent / f"{item.stem}_vi.srt").exists()
+                        or (sub_dir / f"{item.stem}_meta.json").exists()
+                        or (sub_dir / f"{item.stem}_vi.srt").exists()
+                    )
+                    has_dub_file = (
+                        (item.parent / f"{item.stem}_dub_vi.wav").exists()
+                        or (sub_dir / f"{item.stem}_dub_vi.wav").exists()
+                    )
+
+                    is_processed = bool(
+                        exported_file
+                        or proc_status in ("ready", "completed", "published")
+                        or is_uploaded
+                    )
+                    if is_processed and proc_status == "inbox":
+                        proc_status = "ready"
 
                     video_items.append(VideoItemResponse(
                         id=v_id,
@@ -453,7 +492,13 @@ def get_video_list(
                         duration_str=duration_s,
                         has_sub=has_sub,
                         suggest_remix=suggest_remix,
-                        status="inbox",
+                        status=proc_status,
+                        processed_status=proc_status,
+                        is_processed=is_processed,
+                        processed_video_path=exported_file or proc_path,
+                        has_sub_file=has_sub_file,
+                        has_dub_file=has_dub_file,
+                        is_uploaded=is_uploaded,
                         source_type=stype,
                         thumbnail_url=thumb_url,
                         video_url=vid_url,
@@ -494,6 +539,15 @@ def get_video_list(
                 name_lower = title.lower()
                 suggest_remix = any(k in name_lower for k in ["dance", "remix", "music", "beat", "trend"])
 
+                proc_status = db_v.get("processed_status") or "inbox"
+                proc_path = db_v.get("processed_video_path")
+                is_uploaded = bool(db_v.get("is_uploaded"))
+                is_processed = bool(
+                    proc_status in ("ready", "completed", "published")
+                    or (proc_path and Path(proc_path).exists())
+                    or is_uploaded
+                )
+
                 video_items.append(VideoItemResponse(
                     id=db_id,
                     filename=title,
@@ -503,7 +557,13 @@ def get_video_list(
                     duration_str=format_duration(db_v.get("duration", 0)),
                     has_sub=not suggest_remix,
                     suggest_remix=suggest_remix,
-                    status=db_v.get("processed_status", "inbox"),
+                    status=proc_status,
+                    processed_status=proc_status,
+                    is_processed=is_processed,
+                    processed_video_path=proc_path,
+                    has_sub_file=False,
+                    has_dub_file=False,
+                    is_uploaded=is_uploaded,
                     source_type="downloaded",
                     thumbnail_url=db_v.get("thumbnail_url"),
                     video_url=db_v.get("video_url"),

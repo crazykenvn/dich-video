@@ -177,6 +177,12 @@ class VideoItemResponse(BaseModel):
     has_sub: bool = False
     suggest_remix: bool = False
     status: str = "inbox"
+    processed_status: str = "inbox"
+    is_processed: bool = False
+    processed_video_path: str | None = None
+    has_sub_file: bool = False
+    has_dub_file: bool = False
+    is_uploaded: bool = False
     source_type: str = "downloaded"  # "downloaded" | "local"
     thumbnail_url: str | None = None
     video_url: str | None = None

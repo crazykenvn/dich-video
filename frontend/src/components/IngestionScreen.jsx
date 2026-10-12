@@ -3,7 +3,7 @@ import {
   Folder, FolderPlus, Download, HardDrive, Laptop, Globe, Zap, 
   Search, ExternalLink, RefreshCw, Sparkles, Filter, FileVideo, 
   PlusCircle, Upload, Trash2, Plus, Play, ToggleLeft, ToggleRight, 
-  Radio, X, Check, Rss, RotateCcw, ChevronLeft, ChevronRight, CheckSquare, Square, Key, Film,
+  Radio, X, Check, CheckCircle2, Rss, RotateCcw, ChevronLeft, ChevronRight, CheckSquare, Square, Key, Film,
   Settings, Link as LinkIcon, AlertCircle
 } from 'lucide-react';
 import * as api from '../services/api';
@@ -532,8 +532,14 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
       showToast('Vui lòng chọn ít nhất 1 video đã tải để chuyển vào Studio!', 'warning');
       return;
     }
-    onSelectVideo(downloadedItems[0], 'translate');
-    showToast(`✓ Đã nạp video <b>${downloadedItems[0].filename}</b> vào Studio!`, 'success');
+    const target = downloadedItems[0];
+    const isTargetProcessed = Boolean(target.is_processed || target.status === 'ready' || target.status === 'completed');
+    onSelectVideo(target, 'translate');
+    if (isTargetProcessed) {
+      showToast(`ℹ️ <b>${target.filename}</b> đã có bản xuất thành phẩm. Đang mở lại trong Studio...`, 'info');
+    } else {
+      showToast(`✓ Đã nạp video <b>${target.filename}</b> vào Studio!`, 'success');
+    }
   };
 
   // Mở modal kết nối tài khoản Douyin (Không tự ý spam polling)
@@ -696,12 +702,16 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
 
   const countDiscovered = videosList.filter(v => v.download_status === 'discovered').length;
   const countDownloaded = videosList.filter(v => v.download_status === 'downloaded').length;
+  const countProcessed = videosList.filter(v => v.is_processed || v.status === 'ready' || v.status === 'completed').length;
+  const countUnprocessed = videosList.filter(v => !v.is_processed && v.status !== 'ready' && v.status !== 'completed' && v.download_status === 'downloaded').length;
   const countTranslate = videosList.filter(v => v.has_sub).length;
   const countRemix = videosList.filter(v => v.suggest_remix).length;
 
   const filteredVideos = videosList.filter(v => {
     if (categoryFilter === 'discovered' && v.download_status !== 'discovered') return false;
     if (categoryFilter === 'downloaded' && v.download_status !== 'downloaded') return false;
+    if (categoryFilter === 'processed' && !v.is_processed && v.status !== 'ready' && v.status !== 'completed') return false;
+    if (categoryFilter === 'unprocessed' && (v.is_processed || v.status === 'ready' || v.status === 'completed' || v.download_status === 'discovered')) return false;
     if (categoryFilter === 'translate' && !v.has_sub) return false;
     if (categoryFilter === 'remix' && !v.suggest_remix) return false;
     if (searchQuery.trim()) {
@@ -1127,6 +1137,33 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                   ✅ Đã Tải ({countDownloaded})
                 </button>
               )}
+              {countUnprocessed > 0 && (
+                <button
+                  onClick={() => { setCategoryFilter('unprocessed'); setCurrentPage(1); }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition flex items-center gap-1 ${
+                    categoryFilter === 'unprocessed'
+                      ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-500/20'
+                      : 'bg-teal-500/10 text-teal-300 border border-teal-500/30 hover:bg-teal-500/20'
+                  }`}
+                  title="Chỉ hiển thị các video đã tải về máy nhưng chưa xử lý"
+                >
+                  ⏳ Chưa Xử Lý ({countUnprocessed})
+                </button>
+              )}
+              {countProcessed > 0 && (
+                <button
+                  onClick={() => { setCategoryFilter('processed'); setCurrentPage(1); }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition flex items-center gap-1 ${
+                    categoryFilter === 'processed'
+                      ? 'bg-violet-600 text-white font-bold shadow-md shadow-violet-500/20'
+                      : 'bg-violet-500/10 text-violet-300 border border-violet-500/30 hover:bg-violet-500/20'
+                  }`}
+                  title="Chỉ hiển thị các video đã được xử lý / xuất thành phẩm"
+                >
+                  <Sparkles className="w-3 h-3 text-violet-400" />
+                  ⭐ Đã Xử Lý ({countProcessed})
+                </button>
+              )}
               <button
                 onClick={() => { setCategoryFilter('translate'); setCurrentPage(1); }}
                 className={`px-2.5 py-1 rounded-lg text-xs font-medium transition ${
@@ -1317,6 +1354,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                   const isSelected = selectedVideoKeys.has(vKey);
                   const isDiscovered = v.download_status === 'discovered';
                   const isDownloadingThis = downloadingVideoIds.has(v.id);
+                  const isProcessed = Boolean(v.is_processed || v.status === 'ready' || v.status === 'completed');
                   const thumbSrc = v.thumbnail_url
                     ? (v.thumbnail_url.startsWith('http')
                         ? v.thumbnail_url
@@ -1327,10 +1365,22 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                     <div
                       key={vKey}
                       onClick={() => toggleSelectVideo(vKey)}
+                      onDoubleClick={() => {
+                        if (!isDiscovered) {
+                          onSelectVideo(v, 'translate');
+                          if (isProcessed) {
+                            showToast(`ℹ️ <b>${v.filename}</b> đã có bản xuất thành phẩm. Đang mở lại trong Studio...`, 'info');
+                          } else {
+                            showToast(`✓ Đã nạp video <b>${v.filename}</b> vào Studio!`, 'success');
+                          }
+                        }
+                      }}
                       className={`group relative rounded-xl overflow-hidden border cursor-pointer transition-all duration-200 flex flex-col select-none ${
                         isSelected
                           ? 'bg-sky-950/70 border-sky-400 ring-2 ring-sky-500 shadow-lg shadow-sky-500/20'
-                          : 'bg-slate-950/80 border-slate-800 hover:border-slate-600 hover:shadow-md'
+                          : isProcessed
+                            ? 'bg-gradient-to-b from-slate-950/90 to-violet-950/25 border-violet-500/50 hover:border-violet-400 shadow-md shadow-violet-950/20 ring-1 ring-violet-500/20'
+                            : 'bg-slate-950/80 border-slate-800 hover:border-slate-600 hover:shadow-md'
                       }`}
                     >
                       {/* Thumbnail Container (Portrait Card Aspect 9:14) */}
@@ -1369,7 +1419,11 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                               📌 Ghim
                             </span>
                           )}
-                          {isDiscovered ? (
+                          {isProcessed ? (
+                            <span className="text-[9px] font-bold bg-violet-600 text-white px-2 py-0.5 rounded shadow-lg ring-1 ring-violet-300/40 flex items-center gap-1 backdrop-blur-sm">
+                              <CheckCircle2 className="w-3 h-3 stroke-[2.5]" /> Đã xử lý
+                            </span>
+                          ) : isDiscovered ? (
                             <span className="text-[9px] font-bold bg-amber-500/90 text-slate-950 px-1.5 py-0.5 rounded shadow backdrop-blur-sm">
                               Chờ tải
                             </span>
@@ -1418,11 +1472,25 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                           <span className="truncate max-w-[85px] font-mono text-slate-500" title={v.published_at || ''}>
                             {v.published_at ? new Date(v.published_at).toLocaleDateString('vi-VN') : (isDiscovered ? 'Chờ tải' : `${v.size_mb || 0} MB`)}
                           </span>
-                          {v.suggest_remix ? (
-                            <span className="text-purple-400 font-medium">⚡ Remix</span>
-                          ) : (
-                            <span className="text-sky-400 font-medium">🌐 Sub</span>
-                          )}
+                          <div className="flex items-center gap-1">
+                            {isProcessed ? (
+                              <span
+                                className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 border border-violet-500/40 font-semibold flex items-center gap-0.5"
+                                title={v.processed_video_path ? `Đã xuất: ${v.processed_video_path}` : 'Đã có video thành phẩm'}
+                              >
+                                <Sparkles className="w-2.5 h-2.5 text-violet-400" /> Đã xuất
+                              </span>
+                            ) : v.has_sub_file ? (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-semibold">
+                                Có Sub
+                              </span>
+                            ) : null}
+                            {v.suggest_remix ? (
+                              <span className="text-purple-400 font-medium">⚡ Remix</span>
+                            ) : (
+                              <span className="text-sky-400 font-medium">🌐 Sub</span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
