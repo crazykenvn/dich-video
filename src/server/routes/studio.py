@@ -823,8 +823,11 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
             ocr_blocks_data = [b.to_dict() for b in loaded_ocr]
 
     try:
-        # Nếu là chế độ Remix HOẶC người dùng xóa hết phụ đề (không có segments) -> Không đè phụ đề rác
-        if req.mode == "remix" or not req.segments:
+        dub_wav = target_p.parent / f"{stem}_dub_vi.wav"
+        use_dub = not req.is_dub_muted and (dub_wav.exists() or bool(req.segments))
+
+        # Nếu là chế độ Remix HOẶC người dùng tắt cả phụ đề và lồng tiếng -> Không đè phụ đề rác
+        if req.mode == "remix" or (not req.segments and not use_dub):
             out_filename = f"{stem}_{req.anti_combo}_remix{ext}" if req.mode == "remix" else f"{stem}_nosub{ext}"
             out_path = dest_dir / out_filename
 
@@ -843,16 +846,19 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
             out_filename = f"{stem}_sub_vi{ext}"
             out_path = dest_dir / out_filename
 
-            srt_path = dest_dir / f"{stem}_vi.srt"
-            seg_objs = [
-                Segment(index=s.id, start=s.start, end=s.end, text=s.text, translated=s.text)
-                for s in req.segments
-            ]
-            write_srt(seg_objs, srt_path, use_translated=True)
+            srt_path = None
+            if req.segments:
+                srt_path = dest_dir / f"{stem}_vi.srt"
+                seg_objs = [
+                    Segment(index=s.id, start=s.start, end=s.end, text=s.text, translated=s.text)
+                    for s in req.segments
+                ]
+                write_srt(seg_objs, srt_path, use_translated=True)
+            else:
+                seg_objs = []
 
             # 1. Kiểm tra hoặc tổng hợp audio lồng tiếng AI tiếng Việt
-            dub_wav = target_p.parent / f"{stem}_dub_vi.wav"
-            if not dub_wav.exists() and seg_objs:
+            if use_dub and not dub_wav.exists() and seg_objs:
                 tts_work_dir = OUTPUT_DIR / "temp" / f"tts_{stem}"
                 try:
                     total_dur = duration_seconds(target_p)
@@ -868,7 +874,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                     print(f"[studio export] Cảnh báo tạo voiceover: {e_tts}")
 
             # 2. Render video thành phẩm: hòa âm tiếng Việt + đè phụ đề chuẩn Canvas + watermark + OCR
-            if dub_wav.exists():
+            if use_dub and dub_wav.exists():
                 orig_mix = 0.0 if req.is_orig_muted else (float(req.audio_ducking or 12) / 100.0)
                 out_path = mux_audio(
                     video_path=target_p,
@@ -876,7 +882,7 @@ def export_video(req: RenderConfigRequest) -> dict[str, Any]:
                     output_path=out_path,
                     original_mix=orig_mix,
                     srt_path=srt_path,
-                    burn_sub=True,
+                    burn_sub=bool(req.segments),
                     font_size=req.font_size,
                     font_name=req.font_family,
                     sub_style=req.mask_style,

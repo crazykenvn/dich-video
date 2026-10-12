@@ -39,8 +39,16 @@ class YtDlpEngine:
         except ImportError:
             return False
 
-    def fetch_account_videos(self, account_url: str, max_count: int = 15) -> list[dict[str, Any]]:
-        """Lấy danh sách video mới nhất từ URL tài khoản / kênh."""
+    def fetch_account_videos(
+        self,
+        account_url: str,
+        max_count: int | None = None,
+        stop_after_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Lấy danh sách video từ URL tài khoản / kênh.
+        - max_count=None: Quét toàn bộ video của kênh (lần đầu quét).
+        - stop_after_id: Dừng quét ngay khi gặp mốc video ID của lần quét trước (lần 2 quét trở đi).
+        """
         if not self.is_available():
             raise RuntimeError("Chưa cài đặt thư viện yt-dlp. Vui lòng chạy: pip install yt-dlp")
 
@@ -48,12 +56,13 @@ class YtDlpEngine:
 
         ydl_opts: dict[str, Any] = {
             "extract_flat": "in_playlist",
-            "playlistend": max_count,
             "skip_download": True,
             "quiet": True,
             "no_warnings": True,
             "ignoreerrors": True,
         }
+        if max_count:
+            ydl_opts["playlistend"] = max_count
         if self.cookie_file:
             ydl_opts["cookiefile"] = str(self.cookie_file)
 
@@ -67,7 +76,11 @@ class YtDlpEngine:
                 for item in entries:
                     if not item:
                         continue
-                    vid_id = item.get("id") or item.get("url")
+                    vid_id = str(item.get("id") or item.get("url"))
+                    if stop_after_id and str(stop_after_id) == vid_id:
+                        # Đã chạm tới mốc video của lần quét trước đó -> Dừng ngay
+                        break
+
                     title = item.get("title") or f"{self.platform}_{vid_id}"
                     webpage_url = item.get("url")
                     if webpage_url and not webpage_url.startswith("http"):
@@ -81,6 +94,11 @@ class YtDlpEngine:
                         elif self.platform == "instagram":
                             webpage_url = f"https://www.instagram.com/p/{vid_id}/"
 
+                    # Lấy URL Thumbnail tốt nhất
+                    thumb = item.get("thumbnail") or ""
+                    if not thumb and item.get("thumbnails"):
+                        thumb = item.get("thumbnails")[-1].get("url") or ""
+
                     if vid_id and webpage_url:
                         videos.append(
                             {
@@ -88,12 +106,16 @@ class YtDlpEngine:
                                 "title": title,
                                 "url": webpage_url,
                                 "duration": item.get("duration", 0),
+                                "thumbnail": thumb,
+                                "cover": thumb,
                             }
                         )
+                        if max_count and len(videos) >= max_count:
+                            break
             except Exception as e:
                 print(f"[YtDlpEngine] Lỗi lấy danh sách video: {e}")
 
-        return videos[:max_count]
+        return videos
 
     def download_video(self, video_url: str, output_file: Path) -> Path:
         """Tải một video đơn lẻ với chất lượng cao nhất MP4."""

@@ -57,6 +57,55 @@ export const pickFolder = () => apiFetch('/api/videos/pick-folder', {
 export const pickFiles = () => apiFetch('/api/videos/pick-files', {
   method: 'POST'
 });
+export const removeFolder = (path, folderType = 'local') => apiFetch('/api/videos/remove-folder', {
+  method: 'POST',
+  body: JSON.stringify({ path, folder_type: folderType })
+});
+
+// Crawler Accounts API
+export const getCrawlerAccounts = () => apiFetch('/api/videos/crawler/accounts');
+export const addCrawlerAccount = (data) => apiFetch('/api/videos/crawler/accounts', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const toggleCrawlerAccount = (accountId, isActive) => apiFetch('/api/videos/crawler/toggle', {
+  method: 'POST',
+  body: JSON.stringify({ account_id: accountId, is_active: isActive })
+});
+export const deleteCrawlerAccount = (accountId) => apiFetch(`/api/videos/crawler/accounts/${encodeURIComponent(accountId)}`, {
+  method: 'DELETE'
+});
+export const scanCrawlerAccounts = (accountId = null, maxVideos = null, forceFullScan = false) => apiFetch('/api/videos/crawler/scan', {
+  method: 'POST',
+  body: JSON.stringify({ account_id: accountId, max_videos: maxVideos, force_full_scan: forceFullScan })
+});
+export const resetCrawlerScan = (accountId = null, deleteDiscovered = false) => apiFetch('/api/videos/crawler/reset-scan', {
+  method: 'POST',
+  body: JSON.stringify({ account_id: accountId, delete_discovered: deleteDiscovered })
+});
+export const clearThumbnails = (accountId = null) => apiFetch('/api/videos/clear-thumbnails', {
+  method: 'POST',
+  body: JSON.stringify({ account_id: accountId })
+});
+export const deleteVideoItem = (videoId = null, path = null, deleteFile = false) => apiFetch('/api/videos/delete-item', {
+  method: 'POST',
+  body: JSON.stringify({ video_id: videoId, path: path, delete_file: deleteFile })
+});
+export const downloadDiscoveredVideo = (videoId) => apiFetch('/api/videos/download-discovered', {
+  method: 'POST',
+  body: JSON.stringify({ video_id: videoId })
+});
+export const openDouyinLogin = () => apiFetch('/api/videos/crawler/douyin-login', {
+  method: 'POST',
+});
+export const getDouyinStatus = () => apiFetch('/api/videos/crawler/douyin-status');
+export const confirmDouyinLogin = () => apiFetch('/api/videos/crawler/douyin-confirm', {
+  method: 'POST',
+});
+export const saveDouyinCookie = (cookie) => apiFetch('/api/videos/crawler/douyin-cookie', {
+  method: 'POST',
+  body: JSON.stringify({ cookie }),
+});
 export const uploadVideo = async (file) => {
   const formData = new FormData();
   formData.append('file', file);

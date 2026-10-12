@@ -52,6 +52,54 @@ class ScanLocalFolderRequest(BaseModel):
     source_name: str | None = None
 
 
+class RemoveFolderRequest(BaseModel):
+    path: str
+    folder_type: str = "local"  # "local" | "subfolder"
+
+
+class AddAccountRequest(BaseModel):
+    platform: str
+    url: str
+    name: str | None = None
+    account_id: str | None = None
+    mode: str = "remix"
+    auto_process: bool = True
+
+
+class ToggleAccountRequest(BaseModel):
+    account_id: str
+    is_active: bool
+
+
+class ScanAccountsRequest(BaseModel):
+    account_id: str | None = None  # None = scan all active
+    max_videos: int | None = None
+    force_full_scan: bool = False
+
+
+class DownloadDiscoveredRequest(BaseModel):
+    video_id: int
+
+
+class DeleteVideoRequest(BaseModel):
+    video_id: int | None = None
+    path: str | None = None
+    delete_file: bool = False
+
+
+class ClearThumbnailsRequest(BaseModel):
+    account_id: str | None = None  # None = clear all
+
+
+class ResetScanRequest(BaseModel):
+    account_id: str | None = None  # None = reset all
+    delete_discovered: bool = False
+
+
+class SaveDouyinCookieRequest(BaseModel):
+    cookie: str
+
+
 class TogglePublishStatusRequest(BaseModel):
     video_id: int
     platform: str
@@ -96,6 +144,7 @@ class RenderConfigRequest(BaseModel):
     watermark_enabled: bool = True
     watermark_text: str = "KEN STUDIO"
     is_orig_muted: bool = False
+    is_dub_muted: bool = False
     audio_ducking: int = 12
     ocr_blocks: list[VideoTextBlockModel] | None = None
 
@@ -129,6 +178,14 @@ class VideoItemResponse(BaseModel):
     suggest_remix: bool = False
     status: str = "inbox"
     source_type: str = "downloaded"  # "downloaded" | "local"
+    thumbnail_url: str | None = None
+    video_url: str | None = None
+    download_status: str = "downloaded"  # "discovered" | "downloaded"
+    platform: str | None = None
+    platform_video_id: str | None = None
+    account_id: str | None = None
+    published_at: str | None = None
+    is_pinned: int = 0
 
 
 class AutoTranslateRequest(BaseModel):

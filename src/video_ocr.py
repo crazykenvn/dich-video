@@ -28,15 +28,89 @@ logger = logging.getLogger(__name__)
 _GLOBAL_OCR_ENGINE: Any = None
 
 
+def _configure_rapidocr_gpu() -> None:
+    """Cấu hình và monkey-patch RapidOCR OrtInferSession để ưu tiên DirectML/CUDA GPU thay vì CPU."""
+    try:
+        import onnxruntime as ort
+        from rapidocr_onnxruntime import utils
+
+        if getattr(utils.OrtInferSession, "_gpu_patched", False):
+            return
+
+        def patched_init(self: Any, config: dict[str, Any]) -> None:
+            sess_opt = ort.SessionOptions()
+            sess_opt.log_severity_level = 3
+            sess_opt.enable_cpu_mem_arena = False
+            sess_opt.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+            available = ort.get_available_providers()
+            ep_list = []
+
+            # 1. Ưu tiên NVIDIA CUDA (nếu driver/cuDNN đã sẵn sàng)
+            if "CUDAExecutionProvider" in available:
+                ep_list.append(("CUDAExecutionProvider", {
+                    "device_id": 0,
+                    "arena_extend_strategy": "kNextPowerOfTwo",
+                    "cudnn_conv_algo_search": "EXHAUSTIVE",
+                    "do_copy_in_default_stream": True,
+                }))
+
+            # 2. Ưu tiên DirectML (DirectX 12 GPU trên Windows - RTX 3060/AMD/Intel, không phụ thuộc CUDA/cuDNN DLLs)
+            if "DmlExecutionProvider" in available:
+                ep_list.append(("DmlExecutionProvider", {
+                    "device_id": 0,
+                }))
+
+            # 3. Fallback CPU
+            if "CPUExecutionProvider" in available:
+                ep_list.append(("CPUExecutionProvider", {
+                    "arena_extend_strategy": "kSameAsRequested",
+                }))
+
+            self._verify_model(config["model_path"])
+            try:
+                self.session = ort.InferenceSession(
+                    config["model_path"],
+                    sess_options=sess_opt,
+                    providers=ep_list,
+                )
+            except Exception as ep_err:
+                logger.warning(f"[video_ocr] Không thể khởi tạo GPU provider ({ep_err}), chuyển về CPUExecutionProvider.")
+                self.session = ort.InferenceSession(
+                    config["model_path"],
+                    sess_options=sess_opt,
+                    providers=["CPUExecutionProvider"],
+                )
+
+        utils.OrtInferSession.__init__ = patched_init
+        utils.OrtInferSession._gpu_patched = True
+        logger.info("[video_ocr] Đã thiết lập hook GPU cho RapidOCR OrtInferSession (CUDA / DirectML).")
+    except Exception as e:
+        logger.warning(f"[video_ocr] Không thể cấu hình GPU hook cho RapidOCR: {e}")
+
+
 def get_ocr_engine() -> Any:
-    """Khởi tạo và trả về instance singleton RapidOCR."""
+    """Khởi tạo và trả về instance singleton RapidOCR (tăng tốc phần cứng GPU DirectML/CUDA)."""
     global _GLOBAL_OCR_ENGINE
     if _GLOBAL_OCR_ENGINE is None:
         try:
+            _configure_rapidocr_gpu()
             from rapidocr_onnxruntime import RapidOCR
-            # Khởi tạo mặc định dùng ONNXRuntime
             _GLOBAL_OCR_ENGINE = RapidOCR()
-            logger.info("[video_ocr] Đã khởi tạo thành công RapidOCR Engine.")
+
+            # Kiểm tra provider thực tế
+            active_providers = []
+            if hasattr(_GLOBAL_OCR_ENGINE, "text_detector") and hasattr(_GLOBAL_OCR_ENGINE.text_detector, "infer"):
+                active_providers = _GLOBAL_OCR_ENGINE.text_detector.infer.session.get_providers()
+            elif hasattr(_GLOBAL_OCR_ENGINE, "text_recognizer") and hasattr(_GLOBAL_OCR_ENGINE.text_recognizer, "session"):
+                active_providers = _GLOBAL_OCR_ENGINE.text_recognizer.session.session.get_providers()
+
+            gpu_active = any("Dml" in p or "CUDA" in p for p in active_providers)
+            p_str = ", ".join(active_providers) if active_providers else "Unknown"
+            if gpu_active:
+                logger.info(f"[video_ocr] RapidOCR Engine đã sẵn sàng với TĂNG TỐC GPU: {p_str}")
+            else:
+                logger.warning(f"[video_ocr] RapidOCR Engine đang chạy trên CPU: {p_str}")
         except Exception as e:
             logger.error(f"[video_ocr] Lỗi khởi tạo RapidOCR: {e}")
             raise
@@ -197,21 +271,34 @@ class VideoOCRScanner:
             return []
 
         # Đo tỉ lệ scale giữa frame ảnh OCR và kích thước video gốc
-        import cv2
-        first_img = cv2.imread(str(frame_files[0]))
-        if first_img is None:
-            # Fallback nếu cv2.imread gặp lỗi đường dẫn
-            import numpy as np
-            first_img = cv2.imdecode(np.fromfile(str(frame_files[0]), dtype=np.uint8), cv2.IMREAD_COLOR)
+        f_w, f_h = vw, vh
+        try:
+            from PIL import Image
+            with Image.open(frame_files[0]) as img:
+                f_w, f_h = img.size
+        except Exception:
+            try:
+                import cv2
+                import numpy as np
+                first_img = cv2.imdecode(np.fromfile(str(frame_files[0]), dtype=np.uint8), cv2.IMREAD_COLOR)
+                if first_img is not None:
+                    f_h, f_w = first_img.shape[:2]
+            except Exception:
+                f_w, f_h = vw, vh
 
-        f_h, f_w = first_img.shape[:2] if first_img is not None else (vh, vw)
         scale_x = float(vw) / float(f_w) if f_w > 0 else 1.0
         scale_y = float(vh) / float(f_h) if f_h > 0 else 1.0
 
-        if progress_callback:
-            progress_callback(f"RapidOCR đang quét {total_frames} khung hình...", 30)
-
         engine = get_ocr_engine()
+        active_providers = []
+        if hasattr(engine, "text_detector") and hasattr(engine.text_detector, "infer"):
+            active_providers = engine.text_detector.infer.session.get_providers()
+        is_gpu = any("Dml" in p or "CUDA" in p for p in active_providers)
+        engine_label = "RapidOCR (GPU Accelerated)" if is_gpu else "RapidOCR (CPU)"
+
+        if progress_callback:
+            progress_callback(f"{engine_label} đang quét {total_frames} khung hình...", 30)
+
         step_sec = 1.0 / self.sample_fps
 
         # 2. Quét OCR từng frame và gom cụm theo thời gian (Temporal IoU)

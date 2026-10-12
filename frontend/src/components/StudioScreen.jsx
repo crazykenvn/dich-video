@@ -50,6 +50,7 @@ export default function StudioScreen({
   // Subtitle Segments
   const [segments, setSegments] = useState([]);
   const [activeSegmentId, setActiveSegmentId] = useState(null);
+  const [showSubtitles, setShowSubtitles] = useState(true);
 
   // Audio & Inspector state
   const [isOrigMuted, setIsOrigMuted] = useState(false);
@@ -83,6 +84,7 @@ export default function StudioScreen({
   const [zoomLevel, setZoomLevel] = useState(100);
   const [magnetEnabled, setMagnetEnabled] = useState(true);
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const timelineScrollRef = useRef(null);
 
   // Auto-translate & Subtitle import state
   const [isTranslating, setIsTranslating] = useState(false);
@@ -312,6 +314,9 @@ export default function StudioScreen({
     showToast(next ? '🔇 Lồng tiếng AI: Đã Tắt' : '🎙️ Lồng tiếng AI: Đã Bật', 'info');
   };
 
+  const toggleOrigMute = toggleMute;
+  const toggleDubAudioMute = toggleDubMute;
+
   // Đồng bộ âm lượng tiếng gốc theo thanh gạt Audio Ducking khi có lồng tiếng
   useEffect(() => {
     if (videoRef.current) {
@@ -486,6 +491,80 @@ export default function StudioScreen({
     const frames = Math.floor((sec % 1) * 30);
     const pad = (n) => String(n).padStart(2, '0');
     return `${pad(mins)}:${pad(secs)}:${pad(frames)}`;
+  };
+
+  // Lắng nghe phím Ctrl + Cuộn chuột trên timeline để phóng to / thu nhỏ linh hoạt
+  useEffect(() => {
+    const el = timelineScrollRef.current;
+    if (!el) return;
+    const onWheel = (e) => {
+      if (e.ctrlKey || e.altKey || e.metaKey) {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 30 : -30;
+        setZoomLevel(prev => Math.max(100, Math.min(1000, prev + delta)));
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // Tự động cuộn timeline theo kim Playhead khi phát video nếu đang zoom lớn
+  useEffect(() => {
+    if (!timelineScrollRef.current || !tracksWrapperRef.current || totalSeconds <= 0) return;
+    if (isPlaying) {
+      const scrollContainer = timelineScrollRef.current;
+      const containerWidth = scrollContainer.clientWidth;
+      const totalWidth = tracksWrapperRef.current.clientWidth;
+      const playheadX = (currentSeconds / totalSeconds) * totalWidth;
+      const scrollLeft = scrollContainer.scrollLeft;
+
+      if (playheadX > scrollLeft + containerWidth - 120 || playheadX < scrollLeft + 40) {
+        scrollContainer.scrollLeft = Math.max(0, playheadX - 120);
+      }
+    }
+  }, [currentSeconds, isPlaying, totalSeconds]);
+
+  // Bộ tính toán vạch thước thời gian động (Dynamic Ruler Ticks) tự co giãn khớp từng frame
+  const dynamicRulerTicks = React.useMemo(() => {
+    const dur = totalSeconds > 0 ? totalSeconds : 15;
+    const zoomRatio = Math.max(1, zoomLevel / 100);
+    const estWidth = 1000 * zoomRatio;
+    const pxPerSec = estWidth / dur;
+
+    // Chọn bước nhảy thời gian sao cho vạch chính cách nhau 75px - 140px
+    const intervals = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+    const step = intervals.find(iv => iv * pxPerSec >= 75) || 60;
+
+    const ticks = [];
+    const totalSteps = Math.ceil(dur / step);
+
+    for (let i = 0; i <= totalSteps; i++) {
+      const t = Math.min(dur, i * step);
+      const leftPct = (t / dur) * 100;
+      ticks.push({ time: t, leftPct, isMajor: true });
+
+      // Thêm 4 vạch phụ giữa 2 vạch chính nếu khoảng cách đủ lớn
+      if (i < totalSteps && step * pxPerSec >= 35) {
+        const subStep = step / 5;
+        for (let m = 1; m < 5; m++) {
+          const mt = t + m * subStep;
+          if (mt < dur) {
+            ticks.push({ time: mt, leftPct: (mt / dur) * 100, isMajor: false });
+          }
+        }
+      }
+    }
+    return { ticks, step };
+  }, [totalSeconds, zoomLevel]);
+
+  const formatRulerLabel = (sec, step) => {
+    const mins = Math.floor(sec / 60);
+    const secs = Math.floor(sec % 60);
+    if (step < 1) {
+      const frac = Math.floor((sec % 1) * 10);
+      return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${frac}`;
+    }
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
   const splitCurrentSegment = () => {
@@ -763,7 +842,7 @@ export default function StudioScreen({
         mode: workflowMode,
         subfolder: selectedVideo.subfolder || 'general_inbox',
         anti_combo: activeCombo,
-        segments: segments,
+        segments: showSubtitles ? segments : [],
         mask_style: maskStyle,
         box_opacity: 100,
         font_size: fontSize,
@@ -776,8 +855,9 @@ export default function StudioScreen({
         watermark_enabled: watermarkEnabled,
         watermark_text: watermarkText,
         is_orig_muted: isOrigMuted,
+        is_dub_muted: isDubAudioMuted,
         audio_ducking: audioDucking,
-        ocr_blocks: ocrBlocks,
+        ocr_blocks: showOCROverlays ? ocrBlocks : [],
       });
 
       clearInterval(progressTimer);
@@ -1091,7 +1171,7 @@ export default function StudioScreen({
             })}
 
             {/* SUBTITLE BOUNDING BOX (KÉO THẢ & CO GIÃN 8 HANDLE) */}
-            {selectedVideo?.path && workflowMode === 'translate' && activeSegment && (
+            {selectedVideo?.path && workflowMode === 'translate' && showSubtitles && activeSegment && (
               <div
                 onMouseDown={(e) => {
                   if (e.target.classList.contains('handle')) return;
@@ -1985,31 +2065,36 @@ export default function StudioScreen({
             
             <div className="flex items-center gap-1 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
               <button
-                onClick={() => setZoomLevel(Math.max(100, zoomLevel - 20))}
-                className="text-slate-400 hover:text-white font-bold text-xs px-1"
+                onClick={() => setZoomLevel(Math.max(100, zoomLevel - 25))}
+                className="text-slate-400 hover:text-white font-bold text-xs px-1.5 transition active:scale-90"
+                title="Thu nhỏ timeline (Ctrl + Cuộn chuột xuống)"
               >
                 −
               </button>
               <input
                 type="range"
                 min="100"
-                max="250"
+                max="800"
+                step="10"
                 value={zoomLevel}
                 onChange={(e) => setZoomLevel(+e.target.value)}
-                className="w-16 accent-sky-400"
+                className="w-20 accent-sky-400 cursor-pointer"
+                title="Thanh kéo phóng to/thu nhỏ dòng thời gian (Ctrl + Cuộn chuột)"
               />
               <button
-                onClick={() => setZoomLevel(Math.min(250, zoomLevel + 20))}
-                className="text-slate-400 hover:text-white font-bold text-xs px-1"
+                onClick={() => setZoomLevel(Math.min(800, zoomLevel + 25))}
+                className="text-slate-400 hover:text-white font-bold text-xs px-1.5 transition active:scale-90"
+                title="Phóng to timeline (Ctrl + Cuộn chuột lên)"
               >
                 +
               </button>
-              <span className="font-mono text-[10px] text-slate-400 w-8 text-right">{zoomLevel}%</span>
+              <span className="font-mono text-[10px] text-sky-400 font-bold w-10 text-right">{zoomLevel}%</span>
             </div>
 
             <button
               onClick={() => setZoomLevel(100)}
-              className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white text-xs"
+              className="px-2 py-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white text-xs border border-transparent hover:border-slate-700 transition"
+              title="Vừa khít toàn bộ video (Fit 100%)"
             >
               ⛶ Fit
             </button>
@@ -2018,42 +2103,112 @@ export default function StudioScreen({
         </div>
 
         {/* TIMELINE TRACKS AREA */}
-        <div className="flex-1 overflow-x-auto overflow-y-hidden relative flex">
+        <div ref={timelineScrollRef} className="flex-1 overflow-x-auto overflow-y-hidden relative flex select-none">
           
-          {/* Left Column Track Headers (Fixed width 96px) */}
-          <div className="w-24 bg-[#111827] border-r border-slate-800 shrink-0 flex flex-col z-30 shadow-lg">
-            <div className="h-6 border-b border-slate-800 flex items-center px-2 text-[10px] text-slate-400 font-mono">
-              THỜI GIAN
+          {/* Left Column Track Headers (Width 128px with Eye & Audio toggles) */}
+          <div className="w-32 bg-[#111827] border-r border-slate-800 shrink-0 flex flex-col z-30 shadow-xl select-none">
+            <div className="h-6 border-b border-slate-800 flex items-center justify-between px-2 text-[10px] text-slate-400 font-mono bg-[#0f1424]">
+              <span>DÒNG TRACK</span>
+              <span className="text-[9px] text-slate-500">BẬT/TẮT</span>
             </div>
+
+            {/* Sub AI Track Header */}
             <div className="h-10 border-b border-slate-800/80 px-2 flex items-center justify-between text-[11px] text-slate-300 bg-slate-900/60">
-              <span className="flex items-center gap-1 font-semibold text-sky-400">💬 Sub AI</span>
-              <span className="text-[9px] bg-sky-500/20 px-1 py-0.2 rounded text-sky-300">VI</span>
+              <div className="flex items-center gap-1.5 font-semibold text-sky-400 truncate">
+                <span>💬</span>
+                <span className="truncate">Sub AI</span>
+                <span className="text-[8px] bg-sky-500/20 px-1 py-0.2 rounded text-sky-300 font-mono">VI</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSubtitles(!showSubtitles)}
+                className={`p-1 rounded transition cursor-pointer ${
+                  showSubtitles ? 'text-sky-400 hover:bg-sky-500/20' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
+                }`}
+                title={showSubtitles ? "Đang BẬT phụ đề AI (Bấm để ẩn)" : "Đang TẮT phụ đề AI (Bấm để hiện)"}
+              >
+                {showSubtitles ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              </button>
             </div>
+
+            {/* Chữ Video Track Header */}
             {ocrBlocks.length > 0 && (
               <div className="h-7 border-b border-slate-800/80 px-2 flex items-center justify-between text-[10px] text-amber-300 bg-slate-900/80">
-                <span className="flex items-center gap-1 font-semibold truncate">🏷️ Chữ Video</span>
-                <span className="text-[8px] bg-amber-500/20 px-1 rounded font-mono">{ocrBlocks.length}</span>
+                <div className="flex items-center gap-1.5 font-semibold truncate">
+                  <span>🏷️</span>
+                  <span className="truncate">Chữ Video</span>
+                  <span className="text-[8px] bg-amber-500/20 px-1 rounded font-mono">{ocrBlocks.length}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowOCROverlays(!showOCROverlays)}
+                  className={`p-1 rounded transition cursor-pointer ${
+                    showOCROverlays ? 'text-amber-400 hover:bg-amber-500/20' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
+                  }`}
+                  title={showOCROverlays ? "Đang BẬT che & dịch chữ video (Bấm để ẩn)" : "Đang TẮT che & dịch chữ video (Bấm để hiện)"}
+                >
+                  {showOCROverlays ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                </button>
               </div>
             )}
+
+            {/* Video Track Header */}
             <div className="h-20 px-2 flex flex-col justify-center text-[11px] text-slate-400 gap-1 bg-slate-900/40">
               <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1 font-semibold text-slate-300">🎬 Video</span>
-                <span className="text-[9px] text-slate-500 font-mono">1080p</span>
+                <span className="flex items-center gap-1 font-semibold text-slate-300">
+                  <span>🎬</span> Video
+                </span>
+                <button
+                  type="button"
+                  onClick={toggleOrigMute}
+                  className={`p-1 rounded transition cursor-pointer ${
+                    !isOrigMuted ? 'text-sky-400 hover:bg-sky-500/20' : 'text-rose-400 hover:bg-rose-500/20'
+                  }`}
+                  title={isOrigMuted ? "Tiếng video gốc: Đang TẮT (Bấm để bật)" : "Tiếng video gốc: Đang BẬT (Bấm để tắt)"}
+                >
+                  {!isOrigMuted ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                </button>
               </div>
-              <span className="text-[9px] text-emerald-400 font-mono flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> 9:16 Dọc
-              </span>
+              <div className="flex items-center justify-between text-[9px]">
+                <span className="text-emerald-400 font-mono flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> 9:16
+                </span>
+                <span className="text-slate-500 font-mono">1080p</span>
+              </div>
             </div>
+
+            {/* Audio AI Track Header */}
             <div className="h-11 border-t border-slate-800/80 px-2 flex flex-col justify-center text-[11px] bg-slate-900/60">
               <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1 font-semibold text-emerald-400">🎙️ Audio AI</span>
-                <span className={`text-[8px] px-1 py-0.2 rounded font-mono ${hasDubAudio ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-500'}`}>
-                  {hasDubAudio ? 'WAV' : 'OFF'}
+                <span className="flex items-center gap-1 font-semibold text-emerald-400 truncate">
+                  <span>🎙️</span> Audio AI
+                </span>
+                <button
+                  type="button"
+                  onClick={toggleDubAudioMute}
+                  disabled={!hasDubAudio}
+                  className={`p-1 rounded transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                    hasDubAudio && !isDubAudioMuted
+                      ? 'text-emerald-400 hover:bg-emerald-500/20'
+                      : 'text-rose-400 hover:bg-rose-500/20'
+                  }`}
+                  title={
+                    !hasDubAudio
+                      ? "Chưa có file audio lồng tiếng AI"
+                      : isDubAudioMuted
+                      ? "Audio AI: Đang TẮT (Bấm để bật âm thanh)"
+                      : "Audio AI: Đang BẬT (Bấm để tắt tiếng)"
+                  }
+                >
+                  {hasDubAudio && !isDubAudioMuted ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+              <div className="flex items-center justify-between text-[8px] text-slate-400">
+                <span className="truncate">{hasDubAudio ? (selectedVoice.includes('NamMinh') ? 'Nam Minh' : 'Hoài My') : 'Chưa có'}</span>
+                <span className={`px-1 rounded font-mono ${hasDubAudio ? (!isDubAudioMuted ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300') : 'bg-slate-800 text-slate-500'}`}>
+                  {hasDubAudio ? (!isDubAudioMuted ? 'ON' : 'MUTE') : 'OFF'}
                 </span>
               </div>
-              <span className="text-[8px] text-slate-400 truncate">
-                {hasDubAudio ? (selectedVoice.includes('NamMinh') ? 'Nam Minh' : 'Hoài My') : 'Chưa có'}
-              </span>
             </div>
           </div>
 
@@ -2061,40 +2216,25 @@ export default function StudioScreen({
           <div
             ref={tracksWrapperRef}
             onMouseDown={handleTimelineMouseDown}
-            style={{ width: `${zoomLevel}%`, minWidth: '800px' }}
-            className="relative flex-1 bg-[#090d16] flex flex-col cursor-pointer select-none"
+            style={{ width: `${zoomLevel}%`, minWidth: '100%', flexShrink: 0 }}
+            className="relative bg-[#090d16] flex flex-col cursor-pointer select-none"
           >
             
-            {/* Time Ruler with Major & Minor ticks */}
-            <div className="h-6 bg-[#0f1424] border-b border-slate-800 relative overflow-hidden pointer-events-none">
-              <div className="ruler-tick-major" style={{ left: '0%' }}>
-                <span className="absolute -top-3.5 -left-2 text-[9px] font-mono text-slate-400">00:00</span>
-              </div>
-              <div className="ruler-tick-minor" style={{ left: '6.66%' }}></div>
-              <div className="ruler-tick-minor" style={{ left: '13.33%' }}></div>
-              <div className="ruler-tick-major" style={{ left: '20%' }}>
-                <span className="absolute -top-3.5 -left-2 text-[9px] font-mono text-slate-400">00:03</span>
-              </div>
-              <div className="ruler-tick-minor" style={{ left: '26.66%' }}></div>
-              <div className="ruler-tick-minor" style={{ left: '33.33%' }}></div>
-              <div className="ruler-tick-major" style={{ left: '40%' }}>
-                <span className="absolute -top-3.5 -left-2 text-[9px] font-mono text-slate-400">00:06</span>
-              </div>
-              <div className="ruler-tick-minor" style={{ left: '46.66%' }}></div>
-              <div className="ruler-tick-minor" style={{ left: '53.33%' }}></div>
-              <div className="ruler-tick-major" style={{ left: '60%' }}>
-                <span className="absolute -top-3.5 -left-2 text-[9px] font-mono text-slate-400">00:09</span>
-              </div>
-              <div className="ruler-tick-minor" style={{ left: '66.66%' }}></div>
-              <div className="ruler-tick-minor" style={{ left: '73.33%' }}></div>
-              <div className="ruler-tick-major" style={{ left: '80%' }}>
-                <span className="absolute -top-3.5 -left-2 text-[9px] font-mono text-slate-400">00:12</span>
-              </div>
-              <div className="ruler-tick-minor" style={{ left: '86.66%' }}></div>
-              <div className="ruler-tick-minor" style={{ left: '93.33%' }}></div>
-              <div className="ruler-tick-major" style={{ left: '100%' }}>
-                <span className="absolute -top-3.5 -left-4 text-[9px] font-mono text-slate-400">00:15</span>
-              </div>
+            {/* Dynamic Time Ruler with Major & Minor ticks synced to video frame */}
+            <div className="h-6 bg-[#0f1424] border-b border-slate-800 relative overflow-hidden pointer-events-none select-none">
+              {dynamicRulerTicks.ticks.map((tk, idx) => (
+                <div
+                  key={idx}
+                  style={{ left: `${tk.leftPct}%` }}
+                  className={tk.isMajor ? 'ruler-tick-major' : 'ruler-tick-minor'}
+                >
+                  {tk.isMajor && (
+                    <span className="absolute -top-3.5 -left-3 text-[9px] font-mono text-slate-400 select-none whitespace-nowrap pointer-events-none">
+                      {formatRulerLabel(tk.time, dynamicRulerTicks.step)}
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
 
             {/* CapCut Playhead Needle */}
@@ -2107,7 +2247,9 @@ export default function StudioScreen({
             </div>
 
             {/* Subtitle Track */}
-            <div className="h-10 border-b border-slate-800/80 bg-slate-950/40 relative px-1 py-1 flex items-center">
+            <div className={`h-10 border-b border-slate-800/80 bg-slate-950/40 relative px-1 py-1 flex items-center transition-opacity duration-150 ${
+              showSubtitles ? 'opacity-100' : 'opacity-30 grayscale'
+            }`}>
               {segments.length === 0 ? (
                 selectedVideo ? (
                   <div className="absolute inset-0 flex items-center justify-between px-3 bg-gradient-to-r from-sky-950/80 via-slate-900/90 to-indigo-950/80 border border-dashed border-sky-500/40 rounded-lg z-20">
@@ -2145,7 +2287,7 @@ export default function StudioScreen({
                 segments.map(seg => {
                   const isAct = seg.id === activeSegmentId;
                   const leftPct = totalSeconds > 0 ? (seg.start / totalSeconds) * 100 : 0;
-                  const widthPct = totalSeconds > 0 ? ((seg.end - seg.start) / totalSeconds) * 100 : 10;
+                  const widthPct = totalSeconds > 0 ? ((seg.end - seg.start) / totalSeconds) * 100 : 0.5;
 
                   return (
                     <div
@@ -2155,12 +2297,13 @@ export default function StudioScreen({
                         setActiveSegmentId(seg.id);
                         seekTo(seg.start);
                       }}
-                      style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, 6)}%` }}
-                      className={`absolute h-8 rounded-lg cursor-pointer transition flex items-center justify-between px-2 text-[10px] truncate ${
+                      style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: '22px' }}
+                      className={`absolute h-8 rounded-lg cursor-pointer transition flex items-center justify-between px-2 text-[10px] truncate select-none ${
                         isAct
-                          ? 'bg-gradient-to-r from-sky-500 to-blue-600 text-white font-bold border-2 border-white shadow-md'
+                          ? 'bg-gradient-to-r from-sky-500 to-blue-600 text-white font-bold border-2 border-white shadow-md z-10'
                           : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700/90 border border-slate-700'
                       }`}
+                      title={`[${seg.start.toFixed(1)}s - ${seg.end.toFixed(1)}s] ${seg.text}`}
                     >
                       <span className="truncate">{seg.text}</span>
                     </div>
@@ -2171,11 +2314,13 @@ export default function StudioScreen({
 
             {/* OCR On-Screen Text Track */}
             {ocrBlocks.length > 0 && (
-              <div className="h-7 border-b border-slate-800/80 bg-slate-950/40 relative px-1 py-0.5 flex items-center">
+              <div className={`h-7 border-b border-slate-800/80 bg-slate-950/40 relative px-1 py-0.5 flex items-center transition-opacity duration-150 ${
+                showOCROverlays ? 'opacity-100' : 'opacity-30 grayscale'
+              }`}>
                 {ocrBlocks.map(block => {
                   const isAct = block.id === activeOCRBlockId;
                   const leftPct = totalSeconds > 0 ? (block.start / totalSeconds) * 100 : 0;
-                  const widthPct = totalSeconds > 0 ? ((block.end - block.start) / totalSeconds) * 100 : 8;
+                  const widthPct = totalSeconds > 0 ? ((block.end - block.start) / totalSeconds) * 100 : 0.5;
 
                   return (
                     <div
@@ -2185,15 +2330,15 @@ export default function StudioScreen({
                         setActiveOCRBlockId(block.id);
                         seekTo(block.start);
                       }}
-                      style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, 4)}%` }}
+                      style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: '18px' }}
                       className={`absolute h-5 rounded px-1.5 cursor-pointer transition flex items-center justify-between text-[9px] font-mono truncate select-none ${
                         isAct
-                          ? 'bg-amber-400 text-slate-950 font-bold border border-white shadow-md'
+                          ? 'bg-amber-400 text-slate-950 font-bold border border-white shadow-md z-10'
                           : block.is_enabled
                           ? 'bg-amber-500/25 hover:bg-amber-500/40 text-amber-200 border border-amber-500/40'
                           : 'bg-slate-800/50 text-slate-500 border border-slate-700/50 line-through'
                       }`}
-                      title={`[${block.start}s - ${block.end}s] ${block.text_vi || block.text_zh}`}
+                      title={`[${block.start.toFixed(1)}s - ${block.end.toFixed(1)}s] ${block.text_vi || block.text_zh}`}
                     >
                       <span className="truncate">{block.text_vi || block.text_zh}</span>
                     </div>
@@ -2262,12 +2407,14 @@ export default function StudioScreen({
             </div>
 
             {/* Audio AI Track (Lồng tiếng Việt WAV) */}
-            <div className="h-11 border-t border-slate-800/80 bg-slate-950/70 relative px-1 py-1 flex items-center">
+            <div className={`h-11 border-t border-slate-800/80 bg-slate-950/70 relative px-1 py-1 flex items-center transition-opacity duration-150 ${
+              hasDubAudio && !isDubAudioMuted ? 'opacity-100' : 'opacity-35 grayscale'
+            }`}>
               {hasDubAudio ? (
                 // CapCut-style Audio waveform blocks matching the subtitle segments
                 segments.map((seg) => {
                   const leftPct = totalSeconds > 0 ? (seg.start / totalSeconds) * 100 : 0;
-                  const widthPct = totalSeconds > 0 ? ((seg.end - seg.start) / totalSeconds) * 100 : 10;
+                  const widthPct = totalSeconds > 0 ? ((seg.end - seg.start) / totalSeconds) * 100 : 0.5;
                   const isAct = seg.id === activeSegmentId;
                   return (
                     <div
@@ -2277,13 +2424,13 @@ export default function StudioScreen({
                         setActiveSegmentId(seg.id);
                         seekTo(seg.start);
                       }}
-                      style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, 4)}%` }}
-                      className={`absolute h-8 rounded-md cursor-pointer transition flex flex-col justify-center px-1.5 overflow-hidden border ${
+                      style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: '18px' }}
+                      className={`absolute h-8 rounded-md cursor-pointer transition flex flex-col justify-center px-1.5 overflow-hidden border select-none ${
                         isAct
-                          ? 'bg-emerald-600/30 border-emerald-400 text-emerald-200 shadow-md ring-1 ring-emerald-400'
+                          ? 'bg-emerald-600/30 border-emerald-400 text-emerald-200 shadow-md ring-1 ring-emerald-400 z-10'
                           : 'bg-emerald-950/40 hover:bg-emerald-900/50 border-emerald-800/60 text-emerald-400'
                       }`}
-                      title={`[Audio Lồng Tiếng AI] ${seg.text} (${seg.start}s - ${seg.end}s)`}
+                      title={`[Audio Lồng Tiếng AI] ${seg.text} (${seg.start.toFixed(1)}s - ${seg.end.toFixed(1)}s)`}
                     >
                       <div className="flex items-center justify-between text-[8px] font-mono opacity-80 mb-0.5 pointer-events-none">
                         <span className="truncate">🎙️ {seg.text}</span>

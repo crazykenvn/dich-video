@@ -82,42 +82,64 @@ class BilibiliDownloader:
         digits = re.findall(r"\d+", url_or_mid)
         return digits[0] if digits else url_or_mid
 
-    def get_user_videos(self, space_url_or_mid: str, page_size: int = 15) -> list[dict[str, Any]]:
-        """Lấy danh sách video từ không gian cá nhân (Space) của tác giả."""
+    def get_user_videos(
+        self,
+        space_url_or_mid: str,
+        max_count: int | None = None,
+        stop_after_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Lấy danh sách video từ không gian cá nhân (Space) của tác giả.
+        - max_count=None: Quét toàn bộ video của kênh (lần đầu quét).
+        - stop_after_id: Dừng quét ngay khi gặp mốc video ID của lần quét trước (lần 2 quét trở đi).
+        """
         mid = self.extract_mid(space_url_or_mid)
         if not mid or not mid.isdigit():
             return []
 
         img_key, sub_key = self.get_wbi_keys()
-        params = {
-            "mid": mid,
-            "ps": min(page_size, 30),
-            "pn": 1,
-            "order": "pubdate",
-        }
-        signed_params = enc_wbi(params, img_key, sub_key)
-
         videos = []
-        try:
-            url = "https://api.bilibili.com/x/space/wbi/arc/search"
-            resp = self.session.get(url, params=signed_params, timeout=15)
-            if resp.status_code == 200:
+        pn = 1
+        page_size = 30
+        limit_count = max_count or 1000
+
+        while len(videos) < limit_count:
+            params = {
+                "mid": mid,
+                "ps": page_size,
+                "pn": pn,
+                "order": "pubdate",
+            }
+            signed_params = enc_wbi(params, img_key, sub_key)
+            try:
+                url = "https://api.bilibili.com/x/space/wbi/arc/search"
+                resp = self.session.get(url, params=signed_params, timeout=15)
+                if resp.status_code != 200:
+                    break
                 vlist = resp.json().get("data", {}).get("list", {}).get("vlist", [])
+                if not vlist:
+                    break
                 for v in vlist:
                     bvid = v.get("bvid")
+                    if stop_after_id and str(stop_after_id) == str(bvid):
+                        return videos
                     title = v.get("title", f"bilibili_{bvid}")
+                    cover = v.get("pic", "")
                     if bvid:
                         videos.append(
                             {
-                                "id": bvid,
+                                "id": str(bvid),
                                 "title": title,
                                 "url": f"https://www.bilibili.com/video/{bvid}",
-                                "cover": v.get("pic", ""),
+                                "cover": cover,
+                                "thumbnail": cover,
                                 "duration": v.get("length", 0),
                             }
                         )
-        except Exception:
-            pass
+                        if len(videos) >= limit_count:
+                            return videos
+                pn += 1
+            except Exception:
+                break
 
         return videos
 

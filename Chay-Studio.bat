@@ -32,6 +32,16 @@ if not exist ".\.venv\Lib\site-packages\fastapi" (
     .\.venv\Scripts\pip install fastapi uvicorn pydantic websockets
 )
 
+:: 2.5 Kiem tra bo thu vien Video OCR: RapidOCR, OpenCV, GPU DirectML
+if not exist ".\.venv\Lib\site-packages\rapidocr_onnxruntime" (
+    echo [*] Dang cai dat bo thu vien Video OCR - RapidOCR, OpenCV, GPU DirectML...
+    .\.venv\Scripts\pip install onnxruntime-directml rapidocr-onnxruntime opencv-python-headless
+)
+if not exist ".\.venv\Lib\site-packages\onnxruntime_directml*" (
+    echo [*] Dang cai dat onnxruntime-directml de kich hoat GPU cho RapidOCR...
+    .\.venv\Scripts\pip install onnxruntime-directml
+)
+
 :: 3. Kiem tra ban build React SPA Frontend
 if not exist ".\frontend\dist\index.html" (
     echo [*] Dang build giao dien React SPA Vite va Tailwind...

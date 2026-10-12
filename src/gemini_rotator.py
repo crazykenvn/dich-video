@@ -248,6 +248,49 @@ Danh sách câu thoại cần dịch:
 
         return clean_text
 
+    def generate(self, prompt: str, temperature: float = 0.2, max_retries: int = 3) -> str:
+        """Gửi prompt tự do đến Gemini qua cơ chế xoay vòng key Round-Robin."""
+        if not self.slots or not prompt:
+            return ""
+
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": temperature},
+        }
+
+        attempts = 0
+        total_attempts = max(len(self.slots) * 2, max_retries)
+
+        while attempts < total_attempts:
+            attempts += 1
+            key = self.get_next_key()
+            if not key:
+                break
+
+            headers = {
+                "Content-Type": "application/json",
+                "X-goog-api-key": key,
+            }
+
+            for model_name in PRIMARY_MODELS:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+                try:
+                    resp = requests.post(url, headers=headers, json=payload, timeout=25)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            return candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                    elif resp.status_code in (429, 503):
+                        self.mark_rate_limited(key)
+                        break
+                    else:
+                        logger.error(f"Lỗi gọi Gemini {model_name} ({resp.status_code}): {resp.text[:200]}")
+                except Exception as e:
+                    logger.debug(f"Exception khi gọi Gemini {model_name}: {e}")
+
+        return ""
+
 
 _SHARED_ROTATOR: GeminiRotator | None = None
 

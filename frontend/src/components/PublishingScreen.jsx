@@ -6,7 +6,7 @@ import {
 import * as api from '../services/api';
 
 export default function PublishingScreen({ showToast }) {
-  const [outputRootDir, setOutputRootDir] = useState('D:\\Mine\\dich-video\\output\\ready_to_upload\\');
+  const [outputRootDir, setOutputRootDir] = useState('');
   const [activeSubfolder, setActiveSubfolder] = useState('all');
   const [outputSubfolders, setOutputSubfolders] = useState([]);
   const [readyVideos, setReadyVideos] = useState([]);
@@ -76,35 +76,19 @@ export default function PublishingScreen({ showToast }) {
     }));
   };
 
-  // Browser folder picker cho output_root
+  // Mở hộp thoại chọn thư mục xuất thành phẩm qua Windows Explorer native
   const triggerFolderPicker = async () => {
-    if (window.showDirectoryPicker) {
-      try {
-        const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
-        const newPath = `D:/Mine/dich-video/output/${dirHandle.name}/`;
-        setOutputRootDir(api.formatWinPath(newPath));
-        await api.updateConfig({ output_root_dir: newPath });
-        showToast(`✓ Đã đổi thư mục xuất thành phẩm: ${dirHandle.name}`, 'success');
-        return;
-      } catch (err) {
-        if (err.name === 'AbortError') return;
-      }
-    }
-
-    if (folderInputRef.current) {
-      folderInputRef.current.value = '';
-      folderInputRef.current.click();
+    const res = await api.pickFolder();
+    if (res && res.success && res.path) {
+      setOutputRootDir(api.formatWinPath(res.path));
+      await api.updateConfig({ output_root_dir: res.path });
+      showToast(`✓ Đã đổi thư mục xuất thành phẩm thành:<br/><span class="font-mono text-white text-[11px]">${api.formatWinPath(res.path)}</span>`, 'success');
+      loadPublishData();
     }
   };
 
   const handleFolderInput = (e) => {
-    const files = Array.from(e.target.files);
-    if (!files.length) return;
-    const name = files[0].webkitRelativePath?.split('/')[0] || 'ready_to_upload';
-    const newPath = `D:/Mine/dich-video/output/${name}/`;
-    setOutputRootDir(api.formatWinPath(newPath));
-    api.updateConfig({ output_root_dir: newPath });
-    showToast(`✓ Đã đổi thư mục xuất thành phẩm: ${name}`, 'success');
+    // Không cần dùng file input fallback nếu đã có Windows dialog
   };
 
   const filteredVideos = activeSubfolder === 'all'

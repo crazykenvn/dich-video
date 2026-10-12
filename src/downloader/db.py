@@ -59,18 +59,23 @@ def init_db() -> None:
             """
         )
         # Tự động nâng cấp cột nếu database cũ chưa có
-        try:
-            conn.execute("ALTER TABLE downloaded_videos ADD COLUMN is_uploaded INTEGER DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE downloaded_videos ADD COLUMN uploaded_at TEXT")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE downloaded_videos ADD COLUMN platform_publish_status TEXT DEFAULT '{}'")
-        except Exception:
-            pass
+        for col_def in [
+            ("downloaded_videos", "is_uploaded", "INTEGER DEFAULT 0"),
+            ("downloaded_videos", "uploaded_at", "TEXT"),
+            ("downloaded_videos", "platform_publish_status", "TEXT DEFAULT '{}'"),
+            ("downloaded_videos", "thumbnail_url", "TEXT"),
+            ("downloaded_videos", "video_url", "TEXT"),
+            ("downloaded_videos", "duration", "REAL DEFAULT 0"),
+            ("downloaded_videos", "download_status", "TEXT DEFAULT 'downloaded'"),
+            ("downloaded_videos", "published_at", "TEXT"),
+            ("downloaded_videos", "play_url", "TEXT"),
+            ("downloaded_videos", "is_pinned", "INTEGER DEFAULT 0"),
+            ("monitored_accounts", "last_video_id", "TEXT"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE {col_def[0]} ADD COLUMN {col_def[1]} {col_def[2]}")
+            except Exception:
+                pass
         conn.commit()
 
 
@@ -124,13 +129,19 @@ def update_account_status(account_id: str, is_active: bool) -> None:
         conn.commit()
 
 
-def update_account_last_checked(account_id: str) -> None:
+def update_account_last_checked(account_id: str, last_video_id: str | None = None) -> None:
     now = datetime.now().isoformat()
     with get_connection() as conn:
-        conn.execute(
-            "UPDATE monitored_accounts SET last_checked_at = ? WHERE account_id = ?",
-            (now, account_id),
-        )
+        if last_video_id:
+            conn.execute(
+                "UPDATE monitored_accounts SET last_checked_at = ?, last_video_id = ? WHERE account_id = ?",
+                (now, str(last_video_id), account_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE monitored_accounts SET last_checked_at = ? WHERE account_id = ?",
+                (now, account_id),
+            )
         conn.commit()
 
 
@@ -140,7 +151,37 @@ def delete_account(account_id: str) -> None:
         conn.commit()
 
 
+def reset_account_scan(account_id: str | None = None) -> None:
+    """Reset mốc quét (last_video_id & last_checked_at) để lần quét tiếp theo sẽ quét lại toàn bộ kênh từ đầu."""
+    init_db()
+    with get_connection() as conn:
+        if account_id and account_id != "all":
+            conn.execute(
+                "UPDATE monitored_accounts SET last_video_id = NULL, last_checked_at = NULL WHERE account_id = ?",
+                (account_id,),
+            )
+        else:
+            conn.execute(
+                "UPDATE monitored_accounts SET last_video_id = NULL, last_checked_at = NULL",
+            )
+        conn.commit()
+
+
 def is_video_downloaded(platform: str, platform_video_id: str) -> bool:
+    init_db()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, download_status, raw_video_path FROM downloaded_videos WHERE platform = ? AND platform_video_id = ?",
+            (platform.lower(), str(platform_video_id)),
+        ).fetchone()
+        if not row:
+            return False
+        # Nếu đã có file thực tế hoặc download_status == 'downloaded'
+        return row["download_status"] == "downloaded" and bool(row["raw_video_path"])
+
+
+def is_video_discovered(platform: str, platform_video_id: str) -> bool:
+    """Kiểm tra xem video đã từng được cào/quét metadata vào DB chưa."""
     init_db()
     with get_connection() as conn:
         row = conn.execute(
@@ -150,6 +191,143 @@ def is_video_downloaded(platform: str, platform_video_id: str) -> bool:
         return row is not None
 
 
+def record_discovered_video(
+    account_id: str,
+    platform: str,
+    platform_video_id: str,
+    title: str,
+    thumbnail_url: str = "",
+    video_url: str = "",
+    duration: float = 0.0,
+    published_at: str | None = None,
+    play_url: str = "",
+    is_pinned: int = 0,
+) -> int:
+    """Lưu metadata video khi cào/quét kênh (chưa tải file vật lý)."""
+    init_db()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, download_status, raw_video_path FROM downloaded_videos WHERE platform = ? AND platform_video_id = ?",
+            (platform.lower(), str(platform_video_id)),
+        ).fetchone()
+
+        if row:
+            vid_id = row["id"]
+            conn.execute(
+                """
+                UPDATE downloaded_videos
+                SET title = COALESCE(?, title),
+                    thumbnail_url = CASE WHEN (thumbnail_url IS NULL OR thumbnail_url = '') THEN ? ELSE thumbnail_url END,
+                    video_url = CASE WHEN (video_url IS NULL OR video_url = '') THEN ? ELSE video_url END,
+                    duration = CASE WHEN duration <= 0 THEN ? ELSE duration END,
+                    play_url = CASE WHEN (play_url IS NULL OR play_url = '') THEN ? ELSE play_url END,
+                    published_at = CASE WHEN (published_at IS NULL OR published_at = '') THEN ? ELSE published_at END,
+                    is_pinned = CASE WHEN ? > 0 THEN ? ELSE is_pinned END
+                WHERE id = ?
+                """,
+                (title, thumbnail_url, video_url, duration, play_url, published_at, is_pinned, is_pinned, vid_id),
+            )
+            conn.commit()
+            return vid_id
+
+        cursor = conn.execute(
+            """
+            INSERT INTO downloaded_videos (
+                account_id, platform, platform_video_id, title, raw_video_path,
+                download_status, thumbnail_url, video_url, duration, published_at, processed_status, play_url, is_pinned
+            ) VALUES (?, ?, ?, ?, '', 'discovered', ?, ?, ?, ?, 'inbox', ?, ?)
+            """,
+            (
+                account_id,
+                platform.lower(),
+                str(platform_video_id),
+                title,
+                thumbnail_url,
+                video_url,
+                duration,
+                published_at,
+                play_url,
+                is_pinned,
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid or 0
+
+
+def mark_video_downloaded(
+    platform: str,
+    platform_video_id: str,
+    raw_video_path: str,
+) -> None:
+    """Cập nhật trạng thái video đã tải file vật lý về máy."""
+    init_db()
+    now = datetime.now().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE downloaded_videos
+            SET raw_video_path = ?, download_status = 'downloaded', downloaded_at = ?
+            WHERE platform = ? AND platform_video_id = ?
+            """,
+            (str(raw_video_path), now, platform.lower(), str(platform_video_id)),
+        )
+        conn.commit()
+
+
+def get_video_by_id(video_id: int) -> dict[str, Any] | None:
+    init_db()
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM downloaded_videos WHERE id = ?", (video_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def delete_video_by_id(video_id: int) -> dict[str, Any] | None:
+    """Xóa một video khỏi DB và trả về thông tin record đã xóa."""
+    init_db()
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM downloaded_videos WHERE id = ?", (video_id,)).fetchone()
+        if not row:
+            return None
+        conn.execute("DELETE FROM downloaded_videos WHERE id = ?", (video_id,))
+        conn.commit()
+        return dict(row)
+
+
+def delete_discovered_videos(account_id: str | None = None) -> list[dict[str, Any]]:
+    """Xóa tất cả video ở trạng thái 'discovered' (chưa tải MP4 vật lý) của tài khoản hoặc toàn bộ."""
+    init_db()
+    with get_connection() as conn:
+        query = "SELECT * FROM downloaded_videos WHERE download_status = 'discovered'"
+        params: list[Any] = []
+        if account_id and account_id != "all":
+            query += " AND account_id = ?"
+            params.append(account_id)
+        rows = conn.execute(query, params).fetchall()
+        deleted = [dict(r) for r in rows]
+
+        del_query = "DELETE FROM downloaded_videos WHERE download_status = 'discovered'"
+        del_params: list[Any] = []
+        if account_id and account_id != "all":
+            del_query += " AND account_id = ?"
+            del_params.append(account_id)
+        conn.execute(del_query, del_params)
+        conn.commit()
+        return deleted
+
+
+def get_account_videos_from_db(account_id: str | None = None) -> list[dict[str, Any]]:
+    init_db()
+    query = "SELECT * FROM downloaded_videos"
+    params: list[Any] = []
+    if account_id and account_id != "all":
+        query += " WHERE account_id = ?"
+        params.append(account_id)
+    query += " ORDER BY is_pinned DESC, published_at DESC, id DESC"
+    with get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
 def record_download(
     account_id: str,
     platform: str,
@@ -157,6 +335,9 @@ def record_download(
     title: str,
     raw_video_path: str,
     processed_status: str = "pending",
+    thumbnail_url: str = "",
+    video_url: str = "",
+    duration: float = 0.0,
 ) -> int:
     init_db()
     now = datetime.now().isoformat()
@@ -164,8 +345,9 @@ def record_download(
         cursor = conn.execute(
             """
             INSERT OR REPLACE INTO downloaded_videos (
-                account_id, platform, platform_video_id, title, raw_video_path, downloaded_at, processed_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                account_id, platform, platform_video_id, title, raw_video_path, downloaded_at, processed_status,
+                download_status, thumbnail_url, video_url, duration
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'downloaded', ?, ?, ?)
             """,
             (
                 account_id,
@@ -175,6 +357,9 @@ def record_download(
                 str(raw_video_path),
                 now,
                 processed_status,
+                thumbnail_url,
+                video_url,
+                duration,
             ),
         )
         conn.commit()
