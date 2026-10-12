@@ -21,6 +21,16 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
   const [targetAccount, setTargetAccount] = useState('general_inbox');
   const [isDownloadingQuick, setIsDownloadingQuick] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [scanState, setScanState] = useState({
+    active: false,
+    accountId: null,
+    accountName: '',
+    platform: '',
+    forceFullScan: false,
+    elapsed: 0,
+    statusText: '',
+    minimized: false,
+  });
   const [downloadingVideoIds, setDownloadingVideoIds] = useState(new Set());
 
   // Compact modal states
@@ -264,10 +274,49 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
   // 10. Quét video từ tài khoản (Tất cả hoặc 1 kênh)
   const handleScanAccounts = async (accountId = null, forceFullScan = false) => {
     setIsScanning(true);
+    const targetAcc = accountId ? accounts.find(a => a.account_id === accountId) : null;
+    const targetName = targetAcc ? targetAcc.account_name : (accountId ? accountId : 'Tất cả các kênh theo dõi');
+    const targetPlatform = targetAcc ? targetAcc.platform : 'douyin';
     const modeName = forceFullScan ? 'toàn bộ video từ trước đến nay' : 'video mới nhất';
+
+    setScanState({
+      active: true,
+      accountId,
+      accountName: targetName,
+      platform: targetPlatform,
+      forceFullScan,
+      elapsed: 0,
+      statusText: 'Đang khởi động trình duyệt Headless & nạp Cookie...',
+      minimized: false,
+    });
+
+    const timer = setInterval(() => {
+      setScanState(prev => {
+        if (!prev.active) return prev;
+        const nextElapsed = prev.elapsed + 1;
+        let text = prev.statusText;
+        if (nextElapsed <= 3) {
+          text = 'Đang khởi động trình duyệt Headless & nạp Cookie Douyin...';
+        } else if (nextElapsed <= 7) {
+          text = 'Đang truy cập trang kênh Douyin & kiểm tra chứng thực bảo mật...';
+        } else if (nextElapsed <= 16) {
+          text = 'Đang cuộn trang tự nhiên và trích xuất danh sách video (/aweme/post)...';
+        } else if (nextElapsed <= 28) {
+          text = 'Đang trích xuất link phát HD không logo & tải thumbnail vào bộ đệm cache...';
+        } else {
+          text = 'Đang xử lý đồng bộ dữ liệu vào cơ sở dữ liệu Studio...';
+        }
+        return {
+          ...prev,
+          elapsed: nextElapsed,
+          statusText: text,
+        };
+      });
+    }, 1000);
+
     showToast(
       accountId
-        ? `Đang quét ${modeName} từ kênh...`
+        ? `Đang quét ${modeName} từ kênh "${targetName}"...`
         : `Đang quét ${modeName} tất cả kênh đang bật theo dõi...`,
       'info'
     );
@@ -285,7 +334,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
 
         if (accountId) {
           const matchingSub = srcData?.download_subfolders?.find(s => s.id.includes(accountId));
-          const targetSubId = matchingSub ? matchingSub.id : `douyin_${accountId}`;
+          const targetSubId = matchingSub ? matchingSub.id : `${targetPlatform}_${accountId}`;
           setActiveSourceType('subfolder');
           setActiveSourceId(targetSubId);
           await loadVideos('subfolder', targetSubId);
@@ -293,12 +342,14 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
           await loadVideos(activeSourceType, activeSourceId);
         }
       } else {
-        showToast(`❌ Quét thất bại: ${res?.detail || 'Lỗi kết nối mạng/WAF'}`, 'error');
+        showToast(`❌ Quét thất bại: ${res?.detail || 'Lỗi kết nối mạng/WAF hoặc không có video'}`, 'error');
       }
     } catch (err) {
       showToast(`❌ Lỗi: ${err.message}`, 'error');
     } finally {
+      clearInterval(timer);
       setIsScanning(false);
+      setScanState(prev => ({ ...prev, active: false }));
     }
   };
 
@@ -849,8 +900,12 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                     className="px-2 py-0.5 bg-emerald-500/20 hover:bg-emerald-500/30 disabled:bg-slate-800 text-emerald-300 disabled:text-slate-500 border border-emerald-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95"
                     title="Quét video mới cho tất cả kênh đang bật"
                   >
-                    {isScanning ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
-                    Quét Mới
+                    {isScanning && !scanState.accountId && !scanState.forceFullScan ? (
+                      <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
+                    ) : (
+                      <Play className="w-3 h-3" />
+                    )}
+                    {isScanning && !scanState.accountId && !scanState.forceFullScan ? 'Đang Quét...' : 'Quét Mới'}
                   </button>
                   <button
                     onClick={() => {
@@ -862,7 +917,12 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                     className="px-2 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 disabled:bg-slate-800 text-amber-300 disabled:text-slate-500 border border-amber-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95"
                     title="Reset mốc quét và quét lại TOÀN BỘ video từ trước đến nay của tất cả kênh"
                   >
-                    <RotateCcw className="w-3 h-3" /> Quét Lại
+                    {isScanning && !scanState.accountId && scanState.forceFullScan ? (
+                      <RefreshCw className="w-3 h-3 animate-spin text-amber-400" />
+                    ) : (
+                      <RotateCcw className="w-3 h-3" />
+                    )}
+                    {isScanning && !scanState.accountId && scanState.forceFullScan ? 'Đang Quét Lại...' : 'Quét Lại'}
                   </button>
                   <button
                     onClick={handleDouyinLogin}
@@ -905,6 +965,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                   {accounts.map(acc => {
                     const isAct = Boolean(acc.is_active);
                     const isSelected = activeSourceType === 'subfolder' && activeSourceId.includes(acc.account_id);
+                    const isCurrentScanning = scanState.active && scanState.accountId === acc.account_id;
                     return (
                       <div
                         key={acc.id || acc.account_id}
@@ -924,7 +985,14 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                         <div className="flex items-center gap-2 min-w-0">
                           {getPlatformBadge(acc.platform)}
                           <div className="min-w-0">
-                            <p className="text-xs font-bold text-white truncate">{acc.account_name}</p>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <p className="text-xs font-bold text-white truncate">{acc.account_name}</p>
+                              {isCurrentScanning && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.2 text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-full animate-pulse shrink-0">
+                                  <RefreshCw className="w-2.5 h-2.5 animate-spin" /> {scanState.elapsed}s
+                                </span>
+                              )}
+                            </div>
                             <p className="text-[10px] text-slate-400 font-mono truncate">
                               ID: {acc.account_id} • {isAct ? '🟢 Đang bật' : '⏸️ Tạm dừng'}
                             </p>
@@ -945,20 +1013,28 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                           <button
                             onClick={(e) => { e.stopPropagation(); handleScanAccounts(acc.account_id, false); }}
                             disabled={isScanning}
-                            className="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-sky-500/20 transition"
+                            className="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-sky-500/20 transition disabled:opacity-50"
                             title="Quét video mới nhất từ mốc trước"
                           >
-                            <Play className="w-3 h-3" />
+                            {isCurrentScanning && !scanState.forceFullScan ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-400" />
+                            ) : (
+                              <Play className="w-3 h-3" />
+                            )}
                           </button>
 
                           {/* Reset & Quét lại toàn bộ video kênh này */}
                           <button
                             onClick={(e) => { e.stopPropagation(); handleResetAccountScan(acc); }}
                             disabled={isScanning}
-                            className="p-1 rounded text-slate-400 hover:text-amber-300 hover:bg-amber-500/20 transition"
+                            className="p-1 rounded text-slate-400 hover:text-amber-300 hover:bg-amber-500/20 transition disabled:opacity-50"
                             title="Reset mốc & Quét lại toàn bộ video từ trước đến nay của kênh này"
                           >
-                            <RotateCcw className="w-3 h-3" />
+                            {isCurrentScanning && scanState.forceFullScan ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                            ) : (
+                              <RotateCcw className="w-3 h-3" />
+                            )}
                           </button>
 
                           {/* Xóa kênh */}
@@ -1105,6 +1181,43 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
 
         {/* Right Video Cards Repository (8 cols) - THUMBNAIL GRID & BULK ACTIONS */}
         <div className="col-span-8 bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col min-h-[560px]">
+          {/* Scanning Live Notification Bar */}
+          {scanState.active && (
+            <div className="mb-3 p-3 bg-sky-950/60 border border-sky-500/40 rounded-xl flex items-center justify-between gap-3 shadow-lg">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                </div>
+                <div className="text-xs min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-sky-300">Đang cào dữ liệu từ kênh:</span>
+                    <span className="text-white font-semibold truncate">{scanState.accountName}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 bg-sky-500/20 text-sky-300 rounded border border-sky-500/30">
+                      {scanState.forceFullScan ? 'Toàn bộ từ đầu' : 'Video mới'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 truncate mt-0.5 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                    {scanState.statusText}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="font-mono text-xs font-bold text-sky-400 bg-sky-950 px-2 py-1 rounded-lg border border-sky-800">
+                  ⏱️ {Math.floor(scanState.elapsed / 60)}:{(scanState.elapsed % 60).toString().padStart(2, '0')}s
+                </span>
+                {scanState.minimized && (
+                  <button
+                    onClick={() => setScanState(prev => ({ ...prev, minimized: false }))}
+                    className="text-[11px] text-sky-300 hover:text-white px-2 py-1 bg-sky-500/20 hover:bg-sky-500/30 rounded border border-sky-500/30 font-medium"
+                  >
+                    Xem chi tiết
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* 1. Header & Filter Tabs */}
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 flex-wrap gap-2">
             <div>
@@ -2017,6 +2130,112 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                 Đóng
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. CRAWLER SCANNING PROGRESS OVERLAY MODAL */}
+      {scanState.active && !scanState.minimized && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+          <div className="bg-[#111827] border border-sky-500/40 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 relative overflow-hidden">
+            {/* Top animated gradient bar */}
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-sky-400 via-indigo-500 to-emerald-400 animate-pulse" />
+
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="relative w-12 h-12 rounded-2xl bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0 border border-sky-500/30 shadow-inner">
+                  <RefreshCw className="w-6 h-6 animate-spin text-sky-400" />
+                  <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-sky-500"></span>
+                  </span>
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                      {scanState.platform.toUpperCase() || 'DOUYIN'} CRAWLER
+                    </span>
+                    <span className="text-[11px] text-slate-400 font-medium">
+                      • {scanState.forceFullScan ? 'Quét toàn bộ từ đầu' : 'Quét video mới'}
+                    </span>
+                  </div>
+                  <h3 className="text-sm font-bold text-white truncate mt-1">
+                    Đang quét: {scanState.accountName}
+                  </h3>
+                </div>
+              </div>
+
+              {/* Minimize button */}
+              <button
+                type="button"
+                onClick={() => setScanState(prev => ({ ...prev, minimized: true }))}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition text-xs flex items-center gap-1 border border-slate-700/60"
+                title="Thu nhỏ xuống góc màn hình để tiếp tục thao tác"
+              >
+                <span>Thu nhỏ</span>
+              </button>
+            </div>
+
+            {/* Status box & elapsed timer */}
+            <div className="bg-slate-900/90 rounded-2xl p-4 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-400 flex items-center gap-1.5 font-medium">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                  Tiến trình hệ thống:
+                </span>
+                <span className="font-mono font-bold text-sky-400 bg-sky-950/90 px-2.5 py-0.5 rounded-lg border border-sky-800/80">
+                  ⏱️ {Math.floor(scanState.elapsed / 60)}:{(scanState.elapsed % 60).toString().padStart(2, '0')}s
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2.5 text-xs text-white bg-slate-950/70 p-3 rounded-xl border border-slate-800/60">
+                <div className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                <span className="leading-relaxed font-medium">{scanState.statusText}</span>
+              </div>
+
+              {/* Animated Progress Bar */}
+              <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
+                <div 
+                  className="bg-gradient-to-r from-sky-500 via-indigo-500 to-emerald-400 h-full rounded-full transition-all duration-500 relative"
+                  style={{
+                    width: `${Math.min(95, Math.max(12, scanState.elapsed * 3.5))}%`
+                  }}
+                >
+                  <div className="absolute inset-0 bg-white/20 animate-pulse" />
+                </div>
+              </div>
+            </div>
+
+            {/* Note info */}
+            <div className="flex items-start gap-2.5 text-[11px] text-slate-400 bg-slate-900/60 border border-slate-800 rounded-xl p-3">
+              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <p className="leading-relaxed">
+                Hệ thống đang mở trình duyệt Headless tự động cuộn trang và tải thumbnail cho từng video để tránh Douyin chặn spam. Quá trình này có thể mất 10 - 30 giây tùy theo số lượng video của kênh.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 6. MINIMIZED FLOATING BADGE (Bottom-Right) */}
+      {scanState.active && scanState.minimized && (
+        <div 
+          onClick={() => setScanState(prev => ({ ...prev, minimized: false }))}
+          className="fixed bottom-6 right-6 z-50 bg-[#111827] border-2 border-sky-500/60 hover:border-sky-400 rounded-2xl p-3.5 shadow-2xl flex items-center gap-3 cursor-pointer transition hover:scale-105 active:scale-95 group max-w-sm"
+          title="Bấm để mở lại bảng tiến trình chi tiết"
+        >
+          <div className="relative w-8 h-8 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+            <RefreshCw className="w-4 h-4 animate-spin text-sky-400" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold text-sky-400 uppercase">Đang quét</span>
+              <span className="text-[10px] font-mono text-slate-400">
+                ⏱️ {Math.floor(scanState.elapsed / 60)}:{(scanState.elapsed % 60).toString().padStart(2, '0')}s
+              </span>
+            </div>
+            <p className="text-xs font-bold text-white truncate">{scanState.accountName}</p>
+            <p className="text-[10px] text-slate-400 truncate">{scanState.statusText}</p>
           </div>
         </div>
       )}
