@@ -318,7 +318,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
   const handleBulkScanAccounts = async (forceFullScan = false) => {
     if (selectedAccountIds.size === 0) {
       if (forceFullScan) {
-        if (!window.confirm("Bạn có chắc muốn Reset mốc quét và quét lại TOÀN BỘ video từ đầu cho tất cả các kênh đang bật?")) return;
+        if (!window.confirm("Bạn có chắc muốn Reset mốc quét và quét lại TOÀN BỘ video từ đầu cho tất cả các kênh?")) return;
       }
       await handleScanAccounts(null, forceFullScan);
       return;
@@ -1036,7 +1036,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                       onClick={() => handleBulkScanAccounts(false)}
                       disabled={isScanning || accounts.length === 0}
                       className="px-2 py-0.5 bg-emerald-500/20 hover:bg-emerald-500/30 disabled:bg-slate-800 text-emerald-300 disabled:text-slate-500 border border-emerald-500/30 rounded text-[10px] font-bold flex items-center gap-1 transition active:scale-95"
-                      title={selectedAccountIds.size > 0 ? `Quét video mới cho ${selectedAccountIds.size} kênh đã chọn` : "Quét video mới cho tất cả các kênh đang bật"}
+                      title={selectedAccountIds.size > 0 ? `Quét video mới cho ${selectedAccountIds.size} kênh đã chọn` : "Quét video mới cho tất cả các kênh"}
                     >
                       {isScanning && !scanState.forceFullScan ? (
                         <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
@@ -1091,7 +1091,6 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
               ) : (
                 <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
                   {accounts.map(acc => {
-                    const isAct = Boolean(acc.is_active);
                     const isSelected = activeSourceType === 'subfolder' && activeSourceId.includes(acc.account_id);
                     const isChecked = selectedAccountIds.has(acc.account_id);
                     const isCurrentScanning = scanState.active && scanState.accountId === acc.account_id;
@@ -1112,7 +1111,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                           isSelected ? 'bg-sky-500/15 border-2 border-sky-400 shadow-sm' : 'bg-slate-950/80 border border-slate-800 hover:border-slate-700'
                         }`}
                       >
-                        <div className="flex items-center gap-2 min-w-0">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           {/* Checkbox chọn */}
                           <div
                             onClick={(e) => {
@@ -1140,42 +1139,24 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                                 </span>
                               )}
                             </div>
-                            <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono truncate mt-0.5">
-                              <span className="truncate">ID: {acc.account_id}</span>
-                              <span>•</span>
-                              <span className="text-slate-300 font-semibold shrink-0">{vidCount} video</span>
-                            </div>
+                            <p className="text-[10px] text-slate-400 font-mono truncate mt-0.5">
+                              ID: {acc.account_id}
+                            </p>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          {/* Trạng thái Bật/Tắt mini (click nhanh) */}
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); handleToggleAccount(acc); }}
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 transition ${
-                              isAct 
-                                ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20' 
-                                : 'bg-slate-800 text-slate-500 hover:bg-slate-700 border border-slate-700/50'
-                            }`}
-                            title={isAct ? 'Đang bật tự động quét (Bấm để tạm dừng)' : 'Đang tạm dừng quét (Bấm để bật)'}
-                          >
-                            <span className={`w-1.5 h-1.5 rounded-full ${isAct ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-                            {isAct ? 'Bật' : 'Tắt'}
-                          </button>
-
-                          {/* Quick 1-click Scan on Hover */}
-                          <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); handleScanAccounts(acc.account_id, false); }}
-                              disabled={isScanning}
-                              className="p-1 rounded bg-sky-500/10 hover:bg-sky-500/25 text-sky-400 hover:text-sky-300 transition"
-                              title="Quét video mới cho kênh này ngay (1 click)"
-                            >
-                              <Play className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                        {/* Right side: Video count badge or scanning indicator */}
+                        <div className="shrink-0 pl-1">
+                          {isCurrentScanning ? (
+                            <div className="flex items-center gap-1 text-[10px] font-mono text-sky-400 bg-sky-950/80 px-2 py-0.5 rounded border border-sky-800/80 animate-pulse">
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                              <span>{scanState.elapsed}s</span>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-400 font-mono bg-slate-900/90 px-2 py-0.5 rounded-lg border border-slate-800 group-hover:border-slate-700 group-hover:text-slate-200 transition">
+                              {vidCount} video
+                            </span>
+                          )}
                         </div>
                       </div>
                     );
