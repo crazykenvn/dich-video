@@ -110,11 +110,19 @@ def add_account(
 
 def get_accounts(active_only: bool = False) -> list[dict[str, Any]]:
     init_db()
-    query = "SELECT * FROM monitored_accounts"
+    query = """
+        SELECT 
+            a.*,
+            COUNT(CASE WHEN v.download_status = 'discovered' THEN 1 END) AS total_discovered,
+            COUNT(CASE WHEN v.download_status = 'downloaded' THEN 1 END) AS total_downloaded,
+            COUNT(CASE WHEN v.processed_status IN ('completed', 'published', 'ready') THEN 1 END) AS total_processed
+        FROM monitored_accounts a
+        LEFT JOIN downloaded_videos v ON a.account_id = v.account_id
+    """
     params: list[Any] = []
     if active_only:
-        query += " WHERE is_active = 1"
-    query += " ORDER BY id DESC"
+        query += " WHERE a.is_active = 1"
+    query += " GROUP BY a.id ORDER BY a.id DESC"
     with get_connection() as conn:
         rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
@@ -127,6 +135,43 @@ def update_account_status(account_id: str, is_active: bool) -> None:
             (int(is_active), account_id),
         )
         conn.commit()
+
+
+def update_account_info(
+    account_id: str,
+    account_name: str | None = None,
+    account_url: str | None = None,
+    process_mode: str | None = None,
+    auto_process: bool | None = None,
+) -> bool:
+    """Cập nhật thông tin kênh theo dõi (tên gợi nhớ, link, chế độ xử lý)."""
+    init_db()
+    fields = []
+    params: list[Any] = []
+    if account_name is not None and account_name.strip():
+        fields.append("account_name = ?")
+        params.append(account_name.strip())
+    if account_url is not None and account_url.strip():
+        fields.append("account_url = ?")
+        params.append(account_url.strip())
+    if process_mode is not None and process_mode.strip():
+        fields.append("process_mode = ?")
+        params.append(process_mode.strip())
+    if auto_process is not None:
+        fields.append("auto_process = ?")
+        params.append(int(auto_process))
+
+    if not fields:
+        return False
+
+    params.append(account_id)
+    with get_connection() as conn:
+        cursor = conn.execute(
+            f"UPDATE monitored_accounts SET {', '.join(fields)} WHERE account_id = ?",
+            params,
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def update_account_last_checked(account_id: str, last_video_id: str | None = None) -> None:
@@ -538,5 +583,44 @@ def toggle_platform_publish_status(video_id: int, platform: str, is_published: b
         )
         conn.commit()
     return current
+
+
+def bulk_toggle_platform_publish_status(
+    video_ids: list[int], platform: str, is_published: bool
+) -> dict[int, dict[str, Any]]:
+    """Cập nhật trạng thái xuất bản hàng loạt cho nhiều video."""
+    import json
+    init_db()
+    results = {}
+    now = datetime.now().isoformat()
+    plat_key = platform.lower()
+
+    with get_connection() as conn:
+        for vid_id in video_ids:
+            current = get_platform_publish_status(vid_id)
+            if plat_key == "all":
+                for p in ["tiktok", "reels", "shorts"]:
+                    current[p] = {
+                        "is_published": is_published,
+                        "updated_at": now if is_published else None,
+                    }
+            else:
+                current[plat_key] = {
+                    "is_published": is_published,
+                    "updated_at": now if is_published else None,
+                }
+            any_pub = any(v.get("is_published", False) for v in current.values())
+            conn.execute(
+                """
+                UPDATE downloaded_videos
+                SET platform_publish_status = ?, is_uploaded = ?, uploaded_at = ?
+                WHERE id = ?
+                """,
+                (json.dumps(current, ensure_ascii=False), int(any_pub), now if any_pub else None, vid_id),
+            )
+            results[vid_id] = current
+        conn.commit()
+    return results
+
 
 

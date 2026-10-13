@@ -71,6 +71,13 @@ class ToggleAccountRequest(BaseModel):
     is_active: bool
 
 
+class UpdateAccountRequest(BaseModel):
+    account_name: str | None = None
+    account_url: str | None = None
+    process_mode: str | None = None
+    auto_process: bool | None = None
+
+
 class ScanAccountsRequest(BaseModel):
     account_id: str | None = None  # None = scan all active
     max_videos: int | None = None
@@ -104,6 +111,12 @@ class TogglePublishStatusRequest(BaseModel):
     video_id: int
     platform: str
     is_published: bool | None = None
+
+
+class BulkPublishStatusRequest(BaseModel):
+    video_ids: list[int]
+    platform: str  # "tiktok" | "reels" | "shorts" | "all"
+    is_published: bool
 
 
 class SubtitleSegmentModel(BaseModel):

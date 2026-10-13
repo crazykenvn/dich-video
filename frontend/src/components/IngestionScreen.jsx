@@ -4,7 +4,7 @@ import {
   Search, ExternalLink, RefreshCw, Sparkles, Filter, FileVideo, 
   PlusCircle, Upload, Trash2, Plus, Play, ToggleLeft, ToggleRight, 
   Radio, X, Check, CheckCircle2, Rss, RotateCcw, ChevronLeft, ChevronRight, CheckSquare, Square, Key, Film,
-  Settings, Link as LinkIcon, AlertCircle
+  Settings, Link as LinkIcon, AlertCircle, Edit3, Clock
 } from 'lucide-react';
 import * as api from '../services/api';
 
@@ -33,6 +33,15 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
   });
   const [downloadingVideoIds, setDownloadingVideoIds] = useState(new Set());
   const [selectedAccountIds, setSelectedAccountIds] = useState(new Set());
+
+  // Channel search & filter states
+  const [accountSearchQuery, setAccountSearchQuery] = useState('');
+  const [accountPlatformFilter, setAccountPlatformFilter] = useState('all');
+
+  // Edit Account Modal states
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingAccount, setEditingAccount] = useState(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // Compact modal states
   const [showStorageModal, setShowStorageModal] = useState(false);
@@ -269,6 +278,87 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
     }
   };
 
+  // Helper định dạng thời gian tương đối
+  const formatRelativeTime = (isoStr) => {
+    if (!isoStr) return 'Chưa quét';
+    try {
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return 'Chưa quét';
+      const diffSec = Math.floor((Date.now() - d.getTime()) / 1000);
+      if (diffSec < 60) return 'Vừa xong';
+      const diffMin = Math.floor(diffSec / 60);
+      if (diffMin < 60) return `${diffMin}p trước`;
+      const diffHour = Math.floor(diffMin / 60);
+      if (diffHour < 24) return `${diffHour}h trước`;
+      const diffDay = Math.floor(diffHour / 24);
+      if (diffDay < 30) return `${diffDay} ngày trước`;
+      return d.toLocaleDateString('vi-VN');
+    } catch {
+      return 'Chưa quét';
+    }
+  };
+
+  // Danh sách kênh lọc theo tìm kiếm và nền tảng
+  const filteredAccounts = accounts.filter(acc => {
+    if (accountPlatformFilter !== 'all' && (acc.platform || '').toLowerCase() !== accountPlatformFilter.toLowerCase()) {
+      return false;
+    }
+    if (accountSearchQuery.trim()) {
+      const q = accountSearchQuery.toLowerCase();
+      const name = (acc.account_name || '').toLowerCase();
+      const id = (acc.account_id || '').toLowerCase();
+      if (!name.includes(q) && !id.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // 9a. Mở modal chỉnh sửa tài khoản
+  const handleOpenEditAccount = (acc, e) => {
+    if (e) e.stopPropagation();
+    setEditingAccount({
+      account_id: acc.account_id,
+      platform: acc.platform || 'douyin',
+      account_name: acc.account_name || '',
+      account_url: acc.account_url || '',
+      process_mode: acc.process_mode || 'remix',
+      auto_process: Boolean(acc.auto_process),
+    });
+    setShowEditModal(true);
+  };
+
+  // 9a2. Lưu chỉnh sửa tài khoản
+  const handleEditAccountSubmit = async (e) => {
+    if (e) e.preventDefault();
+    if (!editingAccount) return;
+    setIsSavingEdit(true);
+    showToast(`Đang cập nhật kênh <b>${editingAccount.account_name}</b>...`, 'info');
+    try {
+      const res = await api.updateCrawlerAccount(editingAccount.account_id, {
+        account_name: editingAccount.account_name.trim(),
+        account_url: editingAccount.account_url.trim(),
+        process_mode: editingAccount.process_mode,
+        auto_process: editingAccount.auto_process,
+      });
+      if (res && res.success) {
+        showToast(`✓ Đã cập nhật kênh <b>${editingAccount.account_name || editingAccount.account_id}</b> thành công!`, 'success');
+        setAccounts(prev => prev.map(a => a.account_id === editingAccount.account_id ? {
+          ...a,
+          account_name: editingAccount.account_name.trim(),
+          account_url: editingAccount.account_url.trim(),
+          process_mode: editingAccount.process_mode,
+          auto_process: editingAccount.auto_process ? 1 : 0,
+        } : a));
+        setShowEditModal(false);
+      } else {
+        showToast(`❌ Lỗi cập nhật: ${res?.detail || 'Không thể cập nhật'}`, 'error');
+      }
+    } catch (err) {
+      showToast(`❌ Lỗi: ${err.message}`, 'error');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   // 9. Xóa tài khoản Crawler
   const handleDeleteAccount = async (acc) => {
     if (!window.confirm(`Bạn có chắc muốn xóa kênh [${acc.platform.toUpperCase()}] "${acc.account_name}" khỏi danh sách theo dõi?`)) return;
@@ -294,10 +384,20 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
 
   // 9c. Chọn tất cả / Bỏ chọn tất cả tài khoản
   const handleSelectAllAccounts = () => {
-    if (selectedAccountIds.size === accounts.length && accounts.length > 0) {
-      setSelectedAccountIds(new Set());
+    const visibleIds = filteredAccounts.map(a => a.account_id);
+    const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedAccountIds.has(id));
+    if (allVisibleSelected) {
+      setSelectedAccountIds(prev => {
+        const next = new Set(prev);
+        visibleIds.forEach(id => next.delete(id));
+        return next;
+      });
     } else {
-      setSelectedAccountIds(new Set(accounts.map(a => a.account_id)));
+      setSelectedAccountIds(prev => {
+        const next = new Set(prev);
+        visibleIds.forEach(id => next.add(id));
+        return next;
+      });
     }
   };
 
@@ -1021,9 +1121,9 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                       type="button"
                       onClick={handleSelectAllAccounts}
                       className="text-slate-400 hover:text-white transition p-0.5 flex items-center gap-1"
-                      title={selectedAccountIds.size === accounts.length && accounts.length > 0 ? "Bỏ chọn tất cả" : "Chọn tất cả kênh"}
+                      title={filteredAccounts.length > 0 && filteredAccounts.every(a => selectedAccountIds.has(a.account_id)) ? "Bỏ chọn tất cả" : "Chọn tất cả kênh đang hiển thị"}
                     >
-                      {selectedAccountIds.size === accounts.length && accounts.length > 0 ? (
+                      {filteredAccounts.length > 0 && filteredAccounts.every(a => selectedAccountIds.has(a.account_id)) ? (
                         <CheckSquare className="w-3.5 h-3.5 text-sky-400" />
                       ) : (
                         <Square className="w-3.5 h-3.5 text-slate-500" />
@@ -1031,9 +1131,9 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                     </button>
                     <span className="text-[10px] font-mono text-slate-300">
                       {selectedAccountIds.size > 0 ? (
-                        <span className="font-bold text-sky-400">{selectedAccountIds.size}/{accounts.length}</span>
+                        <span className="font-bold text-sky-400">{selectedAccountIds.size}/{filteredAccounts.length}</span>
                       ) : (
-                        <span className="text-slate-500">Tất cả ({accounts.length})</span>
+                        <span className="text-slate-500">Tất cả ({filteredAccounts.length})</span>
                       )}
                     </span>
                   </div>
@@ -1088,6 +1188,56 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                 </div>
               )}
 
+              {/* Tầng 3: Tìm kiếm & Lọc kênh theo nền tảng */}
+              {accounts.length > 0 && (
+                <div className="space-y-1.5 pt-0.5">
+                  {/* Search Input */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={accountSearchQuery}
+                      onChange={(e) => setAccountSearchQuery(e.target.value)}
+                      placeholder="Tìm kênh theo tên hoặc ID..."
+                      className="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-8 pr-7 py-1 text-[11px] text-slate-200 placeholder-slate-500 outline-none focus:border-sky-500/60 transition"
+                    />
+                    {accountSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setAccountSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-0.5"
+                        title="Xóa tìm kiếm"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Platform Filter Pills */}
+                  <div className="flex items-center gap-1 overflow-x-auto pb-0.5 scrollbar-thin">
+                    {['all', 'douyin', 'tiktok', 'bilibili'].filter(p => p === 'all' || accounts.some(a => (a.platform || '').toLowerCase() === p)).map(plat => {
+                      const count = plat === 'all' ? accounts.length : accounts.filter(a => (a.platform || '').toLowerCase() === plat).length;
+                      const isAct = accountPlatformFilter === plat;
+                      return (
+                        <button
+                          key={plat}
+                          type="button"
+                          onClick={() => setAccountPlatformFilter(plat)}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold whitespace-nowrap transition flex items-center gap-1 ${
+                            isAct
+                              ? 'bg-sky-500 text-slate-950 font-bold shadow-sm'
+                              : 'bg-slate-950 border border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                          }`}
+                        >
+                          <span>{plat === 'all' ? 'Tất cả' : plat.toUpperCase()}</span>
+                          <span className={`text-[9px] px-1 rounded-full ${isAct ? 'bg-slate-950/20 text-slate-950 font-bold' : 'bg-slate-900 text-slate-500'}`}>{count}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {accounts.length === 0 ? (
                 <div className="p-3 bg-slate-950/60 border border-dashed border-slate-800 rounded-xl text-center space-y-1.5">
                   <p className="text-[11px] text-slate-400">Chưa có kênh nào trong danh sách theo dõi.</p>
@@ -1098,14 +1248,32 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                     ➕ Thêm kênh Douyin / TikTok ngay
                   </button>
                 </div>
+              ) : filteredAccounts.length === 0 ? (
+                <div className="p-3 bg-slate-950/60 border border-dashed border-slate-800 rounded-xl text-center space-y-1.5">
+                  <p className="text-[11px] text-slate-400">Không tìm thấy kênh nào khớp bộ lọc.</p>
+                  <button
+                    onClick={() => { setAccountSearchQuery(''); setAccountPlatformFilter('all'); }}
+                    className="text-xs text-sky-400 hover:underline font-semibold"
+                  >
+                    Xóa bộ lọc tìm kiếm
+                  </button>
+                </div>
               ) : (
                 <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
-                  {accounts.map(acc => {
+                  {filteredAccounts.map(acc => {
                     const isSelected = activeSourceType === 'subfolder' && activeSourceId.includes(acc.account_id);
                     const isChecked = selectedAccountIds.has(acc.account_id);
                     const isCurrentScanning = scanState.active && scanState.accountId === acc.account_id;
                     const matchingSub = sources.download_subfolders?.find(s => s.id.includes(acc.account_id));
-                    const vidCount = matchingSub?.video_count ?? 0;
+                    const fallbackVidCount = matchingSub?.video_count ?? 0;
+                    const discoveredCount = acc.total_discovered ?? 0;
+                    const downloadedCount = acc.total_downloaded ?? fallbackVidCount;
+                    const channelUrl = acc.account_url || (
+                      (acc.platform || '').toLowerCase() === 'douyin' ? `https://www.douyin.com/user/${acc.account_id}` :
+                      (acc.platform || '').toLowerCase() === 'tiktok' ? `https://www.tiktok.com/@${acc.account_id.replace(/^@/, '')}` :
+                      (acc.platform || '').toLowerCase() === 'bilibili' ? `https://space.bilibili.com/${acc.account_id}` :
+                      ''
+                    );
 
                     return (
                       <div
@@ -1121,7 +1289,7 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                           isSelected ? 'bg-sky-500/15 border-2 border-sky-400 shadow-sm' : 'bg-slate-950/80 border border-slate-800 hover:border-slate-700'
                         }`}
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
                           {/* Checkbox chọn */}
                           <div
                             onClick={(e) => {
@@ -1138,35 +1306,102 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
                             )}
                           </div>
 
-                          {getPlatformBadge(acc.platform)}
+                          <div className="shrink-0">{getPlatformBadge(acc.platform)}</div>
 
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5 min-w-0">
                               <p className="text-xs font-bold text-white truncate">{acc.account_name}</p>
+                              {channelUrl && (
+                                <a
+                                  href={channelUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-slate-500 hover:text-sky-400 transition p-0.5 rounded hover:bg-slate-800 shrink-0"
+                                  title={`Mở kênh chính chủ: ${channelUrl}`}
+                                >
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              )}
                               {isCurrentScanning && (
                                 <span className="inline-flex items-center gap-1 px-1.5 py-0.2 text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-full animate-pulse shrink-0">
                                   <RefreshCw className="w-2.5 h-2.5 animate-spin" /> {scanState.elapsed}s
                                 </span>
                               )}
                             </div>
-                            <p className="text-[10px] text-slate-400 font-mono truncate mt-0.5">
+                            <p className="text-[10px] text-slate-400 font-mono truncate mt-0.5" title={`ID: ${acc.account_id}`}>
                               ID: {acc.account_id}
                             </p>
+                            <div className="flex items-center gap-2 mt-0.5 text-[9px] text-slate-500">
+                              <span className="flex items-center gap-1 font-mono" title={`Quét gần nhất: ${acc.last_checked_at || 'Chưa có'}`}>
+                                <Clock className="w-2.5 h-2.5 text-slate-600" /> {formatRelativeTime(acc.last_checked_at)}
+                              </span>
+                              {acc.process_mode && (
+                                <span className="px-1 rounded bg-slate-900 border border-slate-800 text-slate-400 uppercase text-[8px]">
+                                  {acc.process_mode}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
-                        {/* Right side: Video count badge or scanning indicator */}
-                        <div className="shrink-0 pl-1">
+                        {/* Right side: Statistical Badges & Action Buttons */}
+                        <div className="shrink-0 flex items-center gap-1 pl-1">
                           {isCurrentScanning ? (
                             <div className="flex items-center gap-1 text-[10px] font-mono text-sky-400 bg-sky-950/80 px-2 py-0.5 rounded border border-sky-800/80 animate-pulse">
                               <RefreshCw className="w-3 h-3 animate-spin" />
                               <span>{scanState.elapsed}s</span>
                             </div>
                           ) : (
-                            <span className="text-[11px] text-slate-400 font-mono bg-slate-900/90 px-2 py-0.5 rounded-lg border border-slate-800 group-hover:border-slate-700 group-hover:text-slate-200 transition">
-                              {vidCount} video
-                            </span>
+                            <div className="flex items-center gap-1">
+                              {/* Badge Chờ Tải */}
+                              {discoveredCount > 0 && (
+                                <span
+                                  className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                                  title={`${discoveredCount} video chờ tải`}
+                                >
+                                  📥 {discoveredCount}
+                                </span>
+                              )}
+                              {/* Badge Đã Tải */}
+                              {downloadedCount > 0 ? (
+                                <span
+                                  className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                  title={`${downloadedCount} video đã tải về máy`}
+                                >
+                                  💾 {downloadedCount}
+                                </span>
+                              ) : (discoveredCount === 0 && (
+                                <span className="text-[10px] text-slate-500 font-mono bg-slate-900/60 px-1.5 py-0.5 rounded border border-slate-800">
+                                  0 vid
+                                </span>
+                              ))}
+                            </div>
                           )}
+
+                          {/* Nút Mở Kênh Chính Chủ */}
+                          {channelUrl && (
+                            <a
+                              href={channelUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="p-1 text-slate-500 hover:text-sky-300 hover:bg-sky-500/20 rounded-lg transition"
+                              title={`Mở trang cá nhân / kênh chính chủ trong tab mới: ${channelUrl}`}
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                          )}
+
+                          {/* Nút Sửa Kênh */}
+                          <button
+                            type="button"
+                            onClick={(e) => handleOpenEditAccount(acc, e)}
+                            className="p-1 text-slate-500 hover:text-sky-300 hover:bg-sky-500/20 rounded-lg transition"
+                            title="Chỉnh sửa thông tin kênh"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
                     );
@@ -1868,6 +2103,128 @@ export default function IngestionScreen({ onSelectVideo, showToast }) {
           </div>
         </div>
       )}
+
+      {/* 4b. MODAL CHỈNH SỬA KÊNH THEO DÕI */}
+      {showEditModal && editingAccount && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Edit3 className="w-4 h-4 text-sky-400" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Chỉnh Sửa Kênh Theo Dõi
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEditModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditAccountSubmit} className="space-y-3.5 text-xs">
+              {/* Platform & Account ID Info (Read-only) */}
+              <div className="p-2.5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-slate-400">Nền tảng:</span>
+                  <div>{getPlatformBadge(editingAccount.platform)}</div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-slate-400">ID Kênh (Cố định):</span>
+                  <span className="text-[10px] font-mono text-slate-300 max-w-[200px] truncate" title={editingAccount.account_id}>
+                    {editingAccount.account_id}
+                  </span>
+                </div>
+              </div>
+
+              {/* Tên gợi nhớ */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Tên gợi nhớ của kênh:</label>
+                <input
+                  type="text"
+                  required
+                  value={editingAccount.account_name}
+                  onChange={(e) => setEditingAccount(prev => ({ ...prev, account_name: e.target.value }))}
+                  placeholder="Ví dụ: Kênh Review Phim Hay"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none focus:border-sky-500"
+                />
+              </div>
+
+              {/* Link kênh */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Đường dẫn trang cá nhân / Kênh:</label>
+                <input
+                  type="text"
+                  required
+                  value={editingAccount.account_url}
+                  onChange={(e) => setEditingAccount(prev => ({ ...prev, account_url: e.target.value }))}
+                  placeholder="https://www.douyin.com/user/..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono text-[11px] outline-none focus:border-sky-500"
+                />
+              </div>
+
+              {/* Chế độ xử lý mặc định */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Chế độ xử lý mặc định sau khi tải:</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingAccount(prev => ({ ...prev, process_mode: 'remix' }))}
+                    className={`py-2 px-3 rounded-xl border text-left font-medium transition ${
+                      editingAccount.process_mode === 'remix'
+                        ? 'bg-amber-500/20 border-amber-400 text-amber-300 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    ⚡ Lách Bản Quyền (Remix)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingAccount(prev => ({ ...prev, process_mode: 'dub' }))}
+                    className={`py-2 px-3 rounded-xl border text-left font-medium transition ${
+                      editingAccount.process_mode === 'dub'
+                        ? 'bg-sky-500/20 border-sky-400 text-sky-300 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    🌐 Dịch & Lồng Tiếng (Dub)
+                  </button>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(false)}
+                  disabled={isSavingEdit}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-semibold transition"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit}
+                  className="px-5 py-2 bg-sky-500 hover:bg-sky-400 disabled:bg-slate-700 text-slate-950 font-bold rounded-xl shadow-lg shadow-sky-500/20 flex items-center gap-1.5 transition active:scale-95"
+                >
+                  {isSavingEdit ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Đang lưu...
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" /> Lưu Thay Đổi
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* 5. MODAL CÀI ĐẶT THƯ MỤC TẢI VỀ GỐC */}
       {showStorageModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">

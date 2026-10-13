@@ -72,6 +72,10 @@ export const toggleCrawlerAccount = (accountId, isActive) => apiFetch('/api/vide
   method: 'POST',
   body: JSON.stringify({ account_id: accountId, is_active: isActive })
 });
+export const updateCrawlerAccount = (accountId, data) => apiFetch(`/api/videos/crawler/accounts/${encodeURIComponent(accountId)}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
 export const deleteCrawlerAccount = (accountId) => apiFetch(`/api/videos/crawler/accounts/${encodeURIComponent(accountId)}`, {
   method: 'DELETE'
 });
@@ -231,10 +235,14 @@ export const saveOCRBlocks = (videoPath, blocks) => apiFetch('/api/studio/save-o
 // 4. Phân phối Đa nền tảng
 export const getPublishSubfolders = () =>
   apiFetch('/api/publishing/subfolders');
-export const getPublishVideos = (subfolder = 'all') =>
-  apiFetch(`/api/publishing/videos?subfolder=${encodeURIComponent(subfolder)}`);
+export const getPublishVideos = (subfolder = 'all', filterPending = 'none') =>
+  apiFetch(`/api/publishing/videos?subfolder=${encodeURIComponent(subfolder)}&filter_pending=${encodeURIComponent(filterPending)}`);
 export const togglePublish = (videoId, platform, isPublished) => apiFetch('/api/publishing/toggle-status', {
   method: 'POST',
   body: JSON.stringify({ video_id: videoId, platform, is_published: isPublished })
+});
+export const bulkTogglePublish = (videoIds, platform, isPublished) => apiFetch('/api/publishing/bulk-status', {
+  method: 'POST',
+  body: JSON.stringify({ video_ids: videoIds, platform, is_published: isPublished })
 });
 export const getPublishStats = () => apiFetch('/api/publishing/stats');

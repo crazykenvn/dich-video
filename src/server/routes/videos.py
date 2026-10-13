@@ -25,6 +25,7 @@ from ...downloader.db import (
     mark_video_downloaded,
     record_download,
     reset_account_scan,
+    update_account_info,
     update_account_status,
 )
 from ...downloader.manager import DownloadManager, cleanup_thumbnail_file, sanitize_filename
@@ -53,6 +54,7 @@ from ..models import (
     ScanAccountsRequest,
     ScanLocalFolderRequest,
     ToggleAccountRequest,
+    UpdateAccountRequest,
     VideoItemResponse,
 )
 
@@ -858,6 +860,34 @@ def toggle_crawler_account(req: ToggleAccountRequest) -> dict[str, Any]:
         "success": True,
         "account_id": req.account_id,
         "is_active": req.is_active,
+    }
+
+
+@router.put("/crawler/accounts/{account_id}")
+def update_crawler_account(account_id: str, req: UpdateAccountRequest) -> dict[str, Any]:
+    """Cập nhật thông tin kênh theo dõi (tên gợi nhớ, link, chế độ xử lý)."""
+    init_db()
+    accounts = get_accounts(active_only=False)
+    target = next((a for a in accounts if a["account_id"] == account_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy tài khoản {account_id}")
+
+    ok = update_account_info(
+        account_id=account_id,
+        account_name=req.account_name,
+        account_url=req.account_url,
+        process_mode=req.process_mode,
+        auto_process=req.auto_process,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail="Không có thông tin nào được cập nhật hoặc dữ liệu không đổi")
+
+    updated_accs = get_accounts(active_only=False)
+    updated_target = next((a for a in updated_accs if a["account_id"] == account_id), None)
+    return {
+        "success": True,
+        "message": f"Đã cập nhật kênh {req.account_name or account_id} thành công!",
+        "account": updated_target,
     }
 
 
